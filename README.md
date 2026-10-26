@@ -91,6 +91,10 @@ npm run tauri dev      # run the desktop app with hot reload
 npm run tauri build    # build an installable bundle
 ```
 
+To build the macOS installer (a `.dmg` in `release/`), run `scripts/build.sh`,
+or `scripts/build.sh --arch universal` for one that runs on both Apple Silicon
+and Intel Macs. See `scripts/build.sh --help` for signing and notarizing.
+
 `npm run dev` runs only the UI in a browser against an in-memory mock backend
 (`src/lib/mockBackend.ts`), which is handy for UI work without a Rust build.
 Add `?claude=loggedOut` (or `notInstalled`, `notSubscription`) to the URL to see

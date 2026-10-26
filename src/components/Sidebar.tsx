@@ -1,10 +1,10 @@
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
-import { backend, errorText } from "../lib/api";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { backend } from "../lib/api";
 import { formatListTime } from "../lib/format";
 import type { Bot } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
-import { secondaryButton } from "./fields";
-import { ClockIcon, MoreIcon, PlusIcon, SearchIcon } from "./Icons";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { ClearIcon, ClockIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
 import { WindowControls } from "./WindowControls";
 
 export function Sidebar({
@@ -59,26 +59,21 @@ export function Sidebar({
 }
 
 function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: () => void }) {
-  // Where the "⋯" menu opens, in viewport coordinates; unset while closed.
-  const [menuAt, setMenuAt] = useState<{ top: number; right: number }>();
-  const row = useRef<HTMLDivElement>(null);
-  const more = useRef<HTMLButtonElement>(null);
-  const toggleMenu = () => {
-    if (menuAt || !row.current) return setMenuAt(undefined);
-    // Measured on the row, which is always laid out (the button is hidden until hover).
-    const r = row.current.getBoundingClientRect();
-    // Below the button, or above the row near the bottom of the window so the confirmation fits.
-    const top = r.top + 194 > window.innerHeight ? r.top - 154 : r.top + 34;
-    setMenuAt({ top, right: window.innerWidth - r.right + 6 });
-  };
+  // Right-click opens the context menu at the pointer.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
+  const [confirm, setConfirm] = useState<"clear" | "delete">();
   return (
-    <div ref={row} className="group relative shrink-0">
+    <>
       <button
         type="button"
         onClick={onClick}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuAt({ x: e.clientX, y: e.clientY });
+        }}
         aria-current={active || undefined}
-        className={`flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left ${
-          active ? "bg-row-active" : "hover:bg-row-hover"
+        className={`flex w-full shrink-0 items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left ${
+          active ? "bg-row-active" : menuAt ? "bg-row-hover" : "hover:bg-row-hover"
         }`}
       >
         <BotAvatar avatar={bot.avatar} size={30} />
@@ -91,122 +86,121 @@ function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: 
               </span>
             )}
             <div className="flex-1" />
-            {/* The "⋯" button takes the time's place on hover. */}
-            <p
-              className={`shrink-0 text-[12px] text-muted ${
-                menuAt ? "invisible" : "group-focus-within:invisible group-hover:invisible"
-              }`}
-            >
-              {formatListTime(bot.updatedAt)}
-            </p>
+            <p className="shrink-0 text-[12px] text-muted">{formatListTime(bot.updatedAt)}</p>
           </div>
           <p className="truncate text-[12.5px] text-subtle">{bot.preview || "No messages yet"}</p>
         </div>
       </button>
-      <button
-        type="button"
-        aria-label={`More options for ${bot.name}`}
-        title="More"
-        aria-haspopup="menu"
-        aria-expanded={!!menuAt}
-        ref={more}
-        onClick={toggleMenu}
-        className={`absolute top-[9px] right-1.5 h-5 items-center rounded-[6px] px-1 hover:bg-black/5 ${
-          menuAt ? "flex bg-black/5" : "hidden group-focus-within:flex group-hover:flex"
-        }`}
-      >
-        <MoreIcon />
-      </button>
-      {menuAt && <BotMenu bot={bot} at={menuAt} anchor={more} onClose={() => setMenuAt(undefined)} />}
-    </div>
+      {menuAt && (
+        <ContextMenu
+          at={menuAt}
+          label={`${bot.name} options`}
+          onClose={() => setMenuAt(undefined)}
+          items={[
+            { label: "Clear History", icon: <ClearIcon />, onSelect: () => setConfirm("clear") },
+            { label: "Delete Chat", icon: <TrashIcon />, danger: true, onSelect: () => setConfirm("delete") },
+          ]}
+        />
+      )}
+      {confirm === "clear" && (
+        <ConfirmDialog
+          title="Clear History"
+          message={`Delete all messages with ${bot.name}? Its settings are kept. This can't be undone.`}
+          confirmLabel="Clear History"
+          onConfirm={() => backend.clearChat(bot.id)}
+          onClose={() => setConfirm(undefined)}
+        />
+      )}
+      {confirm === "delete" && (
+        <ConfirmDialog
+          title="Delete Chat"
+          message={`Delete ${bot.name} with its messages and settings? This can't be undone.`}
+          confirmLabel="Delete"
+          onConfirm={() => backend.deleteBot(bot.id)}
+          onClose={() => setConfirm(undefined)}
+        />
+      )}
+    </>
   );
 }
 
-/** The sidebar row's "⋯" menu. Clearing the chat asks for confirmation first. */
-function BotMenu({
-  bot,
+type MenuItem = { label: string; icon: ReactNode; danger?: boolean; onSelect: () => void };
+
+/** A right-click menu at the pointer, kept inside the window. Closes on a click elsewhere, Escape or scroll. */
+function ContextMenu({
   at,
-  anchor,
+  label,
+  items,
   onClose,
 }: {
-  bot: Bot;
-  at: { top: number; right: number };
-  /** The "⋯" button, which toggles the menu itself. */
-  anchor: RefObject<HTMLButtonElement | null>;
+  at: { x: number; y: number };
+  label: string;
+  items: MenuItem[];
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [pos, setPos] = useState(at);
 
-  // Close on a click elsewhere, Escape, or scrolling the list (the menu is fixed).
+  // Flip left/up when the menu would run off the window.
+  useLayoutEffect(() => {
+    const r = ref.current!.getBoundingClientRect();
+    setPos({
+      x: at.x + r.width + 8 > window.innerWidth ? Math.max(8, at.x - r.width) : at.x,
+      y: at.y + r.height + 8 > window.innerHeight ? Math.max(8, at.y - r.height) : at.y,
+    });
+  }, [at]);
+
   useEffect(() => {
-    const inside = (e: Event) => [ref.current, anchor.current].some((el) => el?.contains(e.target as Node));
-    const onDown = (e: MouseEvent) => inside(e) || onClose();
+    const outside = (e: Event) => ref.current?.contains(e.target as Node) || onClose();
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    const onScroll = (e: Event) => ref.current?.contains(e.target as Node) || onClose();
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("scroll", onScroll, true);
+    // Next tick, so the right-click that opened the menu doesn't also close it.
+    const id = setTimeout(() => {
+      document.addEventListener("mousedown", outside);
+      document.addEventListener("contextmenu", outside);
+      document.addEventListener("scroll", outside, true);
+      document.addEventListener("keydown", onKey);
+      window.addEventListener("blur", onClose);
+    });
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      clearTimeout(id);
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("contextmenu", outside);
+      document.removeEventListener("scroll", outside, true);
       document.removeEventListener("keydown", onKey);
-      document.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("blur", onClose);
     };
-  }, [anchor, onClose]);
-
-  const clear = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await backend.clearChat(bot.id);
-      onClose();
-    } catch (e) {
-      setError(errorText(e));
-      setBusy(false);
-    }
-  };
+  }, [onClose]);
 
   return (
     <div
       ref={ref}
       role="menu"
-      aria-label={`${bot.name} options`}
-      style={{ top: at.top, right: at.right }}
-      className="fixed z-20 w-[230px] rounded-[10px] border border-modal-line bg-white p-1 shadow-[0_6px_24px_rgb(0_0_0/0.12)]"
+      aria-label={label}
+      style={{ left: pos.x, top: pos.y }}
+      onContextMenu={(e) => e.preventDefault()}
+      className="fixed z-40 flex w-[200px] flex-col rounded-[10px] border border-modal-line bg-white/95 p-1 shadow-[0_8px_28px_rgb(0_0_0/0.14)] backdrop-blur"
     >
-      {confirming ? (
-        <div className="flex flex-col gap-2.5 p-2">
-          <p className="text-[13px] leading-[19px] text-ink">
-            {`Clear all messages with ${bot.name}? This can't be undone.`}
-          </p>
-          {error && <p className="text-[12px] leading-[17px] text-[#c4321c]">{error}</p>}
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={onClose} className={secondaryButton}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void clear()}
-              className="rounded-[15px] bg-[#c4321c] px-[13px] py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          type="button"
-          role="menuitem"
-          autoFocus
-          onClick={() => setConfirming(true)}
-          className="w-full rounded-[7px] px-2.5 py-1.5 text-left text-[13px] text-ink outline-none hover:bg-row-hover focus-visible:bg-row-hover"
-        >
-          Clear chat history
-        </button>
-      )}
+      {items.map((item, i) => (
+        <Fragment key={item.label}>
+          {/* Destructive items sit below a divider, as in macOS menus. */}
+          {item.danger && i > 0 && <div className="mx-2 my-1 h-px bg-divider" />}
+          <button
+            type="button"
+            role="menuitem"
+            autoFocus={i === 0}
+            onClick={() => {
+              onClose();
+              item.onSelect();
+            }}
+            className={`flex items-center gap-2.5 rounded-[7px] px-2.5 py-[7px] text-left text-[13.5px] outline-none hover:bg-row-hover focus-visible:bg-row-hover ${
+              item.danger ? "text-[#e5322d]" : "text-ink"
+            }`}
+          >
+            <span className="flex w-4 justify-center">{item.icon}</span>
+            {item.label}
+          </button>
+        </Fragment>
+      ))}
     </div>
   );
 }

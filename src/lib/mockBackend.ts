@@ -316,6 +316,13 @@ export const mockBackend: Backend = {
     if (bot(botId).setupState === "pending") enter(botId, "kind");
     emitBots();
   },
+  deleteBot: async (botId) => {
+    if (running.has(botId)) throw new Error(BUSY);
+    bots.splice(bots.indexOf(bot(botId)), 1);
+    conversations.delete(botId);
+    steps.delete(botId);
+    emitBots();
+  },
   updateBotConfig: async (botId, config: AgentConfig) => {
     if (config.schedule && config.schedule.days.length === 0) throw new Error("Pick at least one day");
     const b = bot(botId);

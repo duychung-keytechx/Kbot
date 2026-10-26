@@ -1,4 +1,4 @@
-// "Clear chat history" from a bot's "⋯" menu in the sidebar.
+// "Clear History" and "Delete Chat" from a bot's right-click menu in the sidebar.
 //
 // Run with `npm run test:e2e`.
 
@@ -20,13 +20,25 @@ afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-async function clearChat(browser: Browser, name: string) {
-  await browser.$(sidebarRow(name)).moveTo();
-  await browser.$(`button[aria-label="More options for ${name}"]`).click();
-  await browser.$('//*[@role="menu"]//button[normalize-space()="Clear chat history"]').click();
-  await waitForText(browser, `Clear all messages with ${name}?`);
-  await browser.$('//*[@role="menu"]//button[normalize-space()="Clear"]').click();
+/** Right-clicks the bot in the sidebar and picks `item` from its context menu. */
+async function contextMenu(browser: Browser, name: string, item: string) {
+  // The embedded WebDriver has no real right button, so fire the event the click would.
+  await browser.execute((xpath) => {
+    const row = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
+      .singleNodeValue as HTMLElement;
+    const r = row.getBoundingClientRect();
+    const at = { clientX: r.left + 40, clientY: r.top + 20 };
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, ...at }));
+  }, sidebarRow(name));
+  await browser.$(`//*[@role="menu"]//button[normalize-space()="${item}"]`).click();
   await browser.$('[role="menu"]').waitForExist({ reverse: true });
+}
+
+async function clearChat(browser: Browser, name: string) {
+  await contextMenu(browser, name, "Clear History");
+  await waitForText(browser, `Delete all messages with ${name}?`);
+  await browser.$('//*[@role="alertdialog"]//button[normalize-space()="Clear History"]').click();
+  await browser.$('[role="alertdialog"]').waitForExist({ reverse: true });
 }
 
 test("clearing a chat deletes its messages and starts a new Claude session", async () => {
@@ -84,4 +96,36 @@ test("clearing a chat deletes its messages and starts a new Claude session", asy
   const sessionOf = (args: string[]) => args[args.indexOf("--session-id") + 1];
   assert.ok(chats.every((a) => a.includes("--session-id") && !a.includes("--resume")), "both chats start a session");
   assert.notEqual(sessionOf(chats[0]), sessionOf(chats[1]));
+});
+
+test("deleting a chat removes the bot and opens another one", async () => {
+  const session = await launch(dataDir);
+  try {
+    const { browser } = session;
+    await createBot(browser, "Keep Bot", "buddy", "#16B364");
+    await createBot(browser, "Delete Bot", "happy", "#1A73F0");
+    await waitForText(browser, "Hi, I'm Delete Bot!");
+
+    // Cancel keeps it.
+    await contextMenu(browser, "Delete Bot", "Delete Chat");
+    await browser.$('//*[@role="alertdialog"]//button[normalize-space()="Cancel"]').click();
+    await browser.$(sidebarRow("Delete Bot")).waitForDisplayed();
+
+    await contextMenu(browser, "Delete Bot", "Delete Chat");
+    await waitForText(browser, "Delete Delete Bot with its messages and settings?");
+    await browser.$('//*[@role="alertdialog"]//button[normalize-space()="Delete"]').click();
+    await browser.$(sidebarRow("Delete Bot")).waitForExist({ reverse: true });
+    await browser.$(`${sidebarRow("Keep Bot")}[@aria-current="true"]`).waitForExist();
+    await waitForText(browser, "Hi, I'm Keep Bot!");
+  } finally {
+    await session.close();
+  }
+
+  const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
+  try {
+    assert.deepEqual(db.prepare("SELECT name FROM bots").all().map((r) => r.name), ["Keep Bot"]);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM messages m LEFT JOIN bots b ON b.id = m.bot_id WHERE b.id IS NULL").get() as { n: number }).n, 0);
+  } finally {
+    db.close();
+  }
 });

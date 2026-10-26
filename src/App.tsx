@@ -12,9 +12,10 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string>();
   const [creating, setCreating] = useState(false);
 
-  // Open on the most recently active bot.
+  // Open on the most recently active bot, also when the open one is deleted.
   useEffect(() => {
-    if (selectedId || bots.length === 0) return;
+    if (bots.length === 0) return setSelectedId(undefined);
+    if (selectedId && bots.some((b) => b.id === selectedId)) return;
     setSelectedId(bots.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a)).id);
   }, [bots, selectedId]);
 

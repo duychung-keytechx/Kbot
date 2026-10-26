@@ -36,6 +36,8 @@ export interface Backend {
   redoSetup(botId: string): Promise<void>;
   /** Deletes the bot's chat history; a bot still being set up starts setup over. */
   clearChat(botId: string): Promise<void>;
+  /** Deletes the bot with its history and settings. */
+  deleteBot(botId: string): Promise<void>;
   updateBotConfig(botId: string, config: AgentConfig): Promise<Bot>;
   runNow(botId: string): Promise<void>;
   /** Native folder picker; null when cancelled. */
@@ -70,6 +72,7 @@ const tauriBackend: Backend = {
   skipSetup: (botId) => invoke("skip_setup", { botId }),
   redoSetup: (botId) => invoke("redo_setup", { botId }),
   clearChat: (botId) => invoke("clear_chat", { botId }),
+  deleteBot: (botId) => invoke("delete_bot", { botId }),
   updateBotConfig: (botId, config) => invoke("update_bot_config", { botId, config }),
   runNow: (botId) => invoke("run_now", { botId }),
   pickFolder: async () => {

@@ -151,7 +151,20 @@ pub fn redo_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
     setup::restart(&app, &bot_id)
 }
 
-/// "Clear chat history" in the sidebar menu. A bot still being set up starts
+/// "Delete Chat" in the sidebar menu: removes the bot, its history and its
+/// working directory.
+#[tauri::command]
+pub fn delete_bot(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {
+    if state.runs.running().contains(&bot_id) {
+        return Err(BUSY.into());
+    }
+    state.store.lock().unwrap().delete_bot(&bot_id)?;
+    let _ = std::fs::remove_dir_all(agent::workdir(&app, &bot_id));
+    events::bots_changed(&app);
+    Ok(())
+}
+
+/// "Clear History" in the sidebar menu. A bot still being set up starts
 /// its setup over, since the setup cards were part of the history.
 #[tauri::command]
 pub fn clear_chat(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {

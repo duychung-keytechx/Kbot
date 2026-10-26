@@ -65,6 +65,7 @@ pub fn run() {
             commands::skip_setup,
             commands::redo_setup,
             commands::clear_chat,
+            commands::delete_bot,
             commands::update_bot_config,
             commands::run_now,
         ])

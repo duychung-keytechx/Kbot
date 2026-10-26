@@ -234,6 +234,14 @@ impl Store {
         tx.commit().map_err(err)
     }
 
+    /// Deletes a bot; its messages go with it (`ON DELETE CASCADE`).
+    pub fn delete_bot(&mut self, bot_id: &str) -> Result<(), String> {
+        match self.conn.execute("DELETE FROM bots WHERE id = ?1", params![bot_id]).map_err(err)? {
+            0 => Err(format!("unknown bot {bot_id}")),
+            _ => Ok(()),
+        }
+    }
+
     /// Runs `UPDATE bots SET <assignments> WHERE id = ?1` and fails on an unknown bot.
     fn update_bot(&self, bot_id: &str, assignments: &str, values: &[&dyn rusqlite::ToSql]) -> Result<(), String> {
         let mut params: Vec<&dyn rusqlite::ToSql> = vec![&bot_id];
@@ -381,6 +389,22 @@ mod tests {
         assert_eq!(store.bot("a").unwrap().preview, "");
         assert_eq!(store.session_id("a").unwrap(), None);
         assert!(store.clear_messages("missing").is_err());
+    }
+
+    #[test]
+    fn delete_bot_removes_its_messages() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("a", 1)).unwrap();
+        store.insert_bot(bot("b", 2)).unwrap();
+        for id in ["a", "b"] {
+            store.push_message(id, Message::new(MessageBody::User { text: "hi".into() })).unwrap();
+        }
+
+        store.delete_bot("a").unwrap();
+        assert_eq!(store.bots().iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["b"]);
+        assert!(store.messages("a").is_empty());
+        assert_eq!(store.messages("b").len(), 1);
+        assert!(store.delete_bot("a").is_err());
     }
 
     #[test]

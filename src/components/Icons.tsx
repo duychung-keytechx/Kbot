@@ -86,13 +86,30 @@ export const StopIcon = ({ color = "#FFFFFF", className }: IconProps) => (
   <span className={`block size-[10px] shrink-0 rounded-[2px] ${className ?? ""}`} style={{ background: color }} />
 );
 
-/** Sidebar row menu: three horizontal dots (14×3). */
-export const MoreIcon = ({ color = "#6B6B6B", className }: IconProps) => (
-  <span className={`flex w-[14px] shrink-0 items-center justify-between ${className ?? ""}`} aria-hidden>
-    {[0, 1, 2].map((i) => (
-      <span key={i} className="block size-[3px] rounded-full" style={{ background: color }} />
-    ))}
-  </span>
+/** Sidebar context menu: "Clear History" (14px circled ×). */
+export const ClearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+  <Stroke
+    w={14}
+    h={14}
+    d="M7 0.5C10.59 0.5 13.5 3.41 13.5 7C13.5 10.59 10.59 13.5 7 13.5C3.41 13.5 0.5 10.59 0.5 7C0.5 3.41 3.41 0.5 7 0.5ZM4.75 4.75L9.25 9.25M9.25 4.75L4.75 9.25"
+    color={color}
+    width={1.2}
+    round
+    className={className}
+  />
+);
+
+/** Sidebar context menu: "Delete Chat" (13×14 trash can). */
+export const TrashIcon = ({ color = "#E5322D", className }: IconProps) => (
+  <Stroke
+    w={13}
+    h={14}
+    d="M0.5 3H12.5M4.5 3V1.5C4.5 0.95 4.95 0.5 5.5 0.5H7.5C8.05 0.5 8.5 0.95 8.5 1.5V3M1.75 3L2.6 12.6C2.65 13.1 3.07 13.5 3.6 13.5H9.4C9.93 13.5 10.35 13.1 10.4 12.6L11.25 3M5.25 6V10.5M7.75 6V10.5"
+    color={color}
+    width={1.2}
+    round
+    className={className}
+  />
 );
 
 /** Sidebar: the bot has a daily job (11px). */

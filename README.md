@@ -42,6 +42,8 @@ using your own Claude subscription. Built with [Tauri 2](https://tauri.app)
 - **Settings.** Click the agent's name above the chat to change its
   instructions, schedule, web access, folders or model, run the job now, or redo
   the setup.
+- **Clear or delete.** Right-click an agent in the sidebar to clear its chat
+  history (it also forgets the conversation) or delete it.
 - **Read-only folders.** Agents can read the folders you give them but have no
   tools to write files or run commands.
 

@@ -100,7 +100,9 @@ is already built, run just the tests with `node --test "e2e/**/*.test.ts"`.
 
 To regenerate the screenshots above: `npm run screenshots`.
 
-## Third-party notices
+## License
+
+Kbot is released under the [MIT License](LICENSE).
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the bot icon sets and
 their licenses.

@@ -33,17 +33,22 @@ using your own Claude subscription. Built with [Tauri 2](https://tauri.app)
 ## How it works
 
 - **Setup in the chat.** A new agent asks what it should do: chat with you, or
-  run a daily job. It asks for a description, a schedule, whether it may search
-  the web and which folders it may read, asks Claude a few clarifying questions,
-  then shows the instructions it wrote for itself for you to confirm or edit.
+  run a job daily, on an interval, or as a task on a date. It asks for a
+  description, a schedule, whether it may search the web and which folders it
+  may read, asks Claude a few clarifying questions, then shows the instructions
+  it wrote for itself for you to confirm or edit.
 - **`/setup`.** Type it in the chat to see the agent's current setup, then say
   what to change in your own words ("run at 7:00 on weekdays", "turn off web
   search"). Claude updates the setup and shows it to you before saving. On an
   agent that isn't set up yet, `/setup` starts the setup. **Edit** in the
   agent's right-click menu does the same.
-- **Daily jobs.** A job runs at its set time on the chosen days and posts the
+- **Scheduled jobs.** A job runs at its set time on the chosen days, every few
+  minutes or hours, or as a task on a date (once, or every month on that day;
+  on the 29th–31st it runs on the last day of shorter months). It posts the
   result in the chat (with a notification if you want one). Jobs only run while
-  Kbot is open; a missed run is not caught up later.
+  Kbot is open; a missed run is not caught up later, except a one-time task,
+  which runs as soon as Kbot is open again. A task on a date also has **Run
+  now** above its chat.
 - **Settings.** Click the agent's name above the chat to change its
   instructions, schedule, web access, folders or model, run the job now, or redo
   the setup.
@@ -105,7 +110,7 @@ src-tauri/
   src/claude.rs          finds and runs the Claude Code CLI, parses its stream-json output
   src/agent.rs           one agent turn: builds the prompt, streams the reply into the chat
   src/setup.rs           onboarding state machine
-  src/scheduler.rs       daily jobs
+  src/scheduler.rs       scheduled jobs
   src/runs.rs            one run per bot at a time, cancellation
 e2e/                     end-to-end tests, fake `claude` CLI, screenshot script
 icon.png                 the logo; app icons in src-tauri/icons/ are generated from it

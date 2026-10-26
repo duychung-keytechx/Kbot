@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { mockBackend } from "./mockBackend";
 import type {
   AgentConfig,
+  AppSettings,
   Bot,
   BotIcon,
   ClaudeStatus,
@@ -46,6 +47,8 @@ export interface Backend {
   deleteBot(botId: string): Promise<void>;
   updateBotConfig(botId: string, config: AgentConfig): Promise<Bot>;
   runNow(botId: string): Promise<void>;
+  getAppSettings(): Promise<AppSettings>;
+  updateAppSettings(settings: AppSettings): Promise<AppSettings>;
   /** Native folder picker; null when cancelled. */
   pickFolder(): Promise<string | null>;
   onBots(cb: (bots: Bot[]) => void): () => void;
@@ -54,6 +57,8 @@ export interface Backend {
   onCleared(cb: (botId: string) => void): () => void;
   onRun(cb: (e: RunEvent) => void): () => void;
   onClaudeStatus(cb: (status: ClaudeStatus) => void): () => void;
+  /** Kbot > Settings… in the macOS menu bar (`kbot://open-settings`). */
+  onOpenSettings(cb: () => void): () => void;
 }
 
 export const isTauri = "__TAURI_INTERNALS__" in window;
@@ -84,6 +89,8 @@ const tauriBackend: Backend = {
   deleteBot: (botId) => invoke("delete_bot", { botId }),
   updateBotConfig: (botId, config) => invoke("update_bot_config", { botId, config }),
   runNow: (botId) => invoke("run_now", { botId }),
+  getAppSettings: () => invoke("get_app_settings"),
+  updateAppSettings: (settings) => invoke("update_app_settings", { settings }),
   pickFolder: async () => {
     const picked = await open({ directory: true, multiple: false });
     return typeof picked === "string" ? picked : null;
@@ -93,6 +100,7 @@ const tauriBackend: Backend = {
   onCleared: (cb) => subscribe("kbot://cleared", cb),
   onRun: (cb) => subscribe("kbot://run", cb),
   onClaudeStatus: (cb) => subscribe("kbot://claude", cb),
+  onOpenSettings: (cb) => subscribe("kbot://open-settings", cb),
 };
 
 export const backend: Backend = isTauri ? tauriBackend : mockBackend;

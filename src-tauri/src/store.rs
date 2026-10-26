@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::migrate;
-use crate::models::{AgentConfig, Avatar, Bot, Message, MessageBody, SetupState};
+use crate::models::{AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Message, MessageBody, SetupState};
 use crate::setup::Step;
 
 pub struct Store {
@@ -102,11 +102,20 @@ impl Store {
 
     /// Pinned bots first, then newest first.
     pub fn bots(&self) -> Vec<Bot> {
+        self.query_bots("SELECT * FROM bots ORDER BY pinned DESC, created_at DESC, rowid DESC")
+    }
+
+    /// Set-up bots with a scheduled job, for the scheduler.
+    pub fn scheduled_bots(&self) -> Vec<Bot> {
+        self.query_bots(
+            "SELECT * FROM bots
+             WHERE setup_state != 'pending' AND json_extract(config, '$.schedule') IS NOT NULL",
+        )
+    }
+
+    fn query_bots(&self, sql: &str) -> Vec<Bot> {
         let query = || -> rusqlite::Result<Vec<Bot>> {
-            self.conn
-                .prepare_cached("SELECT * FROM bots ORDER BY pinned DESC, created_at DESC, rowid DESC")?
-                .query_map([], bot_from_row)?
-                .collect()
+            self.conn.prepare_cached(sql)?.query_map([], bot_from_row)?.collect()
         };
         query().unwrap_or_else(|e| {
             eprintln!("list bots failed: {e}");
@@ -300,6 +309,25 @@ impl Store {
                 None
             })
     }
+
+    pub fn set_app_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    pub fn app_settings(&self) -> AppSettings {
+        AppSettings { default_model: self.app_setting("default_model").unwrap_or_else(|| DEFAULT_MODEL.into()) }
+    }
+
+    pub fn set_app_settings(&self, settings: &AppSettings) -> Result<(), String> {
+        self.set_app_setting("default_model", &settings.default_model)
+    }
 }
 
 #[cfg(test)]
@@ -333,6 +361,15 @@ mod tests {
             &bots[1].avatar,
             Avatar::Icon { icon: BotIcon::Happy, color } if color == "#ff8800"
         ));
+    }
+
+    #[test]
+    fn app_settings_default_to_sonnet_and_save() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.app_settings().default_model, DEFAULT_MODEL);
+        store.set_app_settings(&AppSettings { default_model: "opus".into() }).unwrap();
+        store.set_app_settings(&AppSettings { default_model: "claude-opus-5-5".into() }).unwrap();
+        assert_eq!(store.app_settings().default_model, "claude-opus-5-5");
     }
 
     #[test]
@@ -394,6 +431,25 @@ mod tests {
         assert_eq!(store.bot("a").unwrap().preview, "");
         assert_eq!(store.session_id("a").unwrap(), None);
         assert!(store.clear_messages("missing").is_err());
+    }
+
+    #[test]
+    fn scheduled_bots_are_set_up_with_a_daily_job() {
+        let mut store = Store::open_in_memory().unwrap();
+        let job = AgentConfig { schedule: Some(Schedule::default()), ..AgentConfig::default() };
+        for (id, state, config) in [
+            ("job", SetupState::Done, job.clone()),
+            ("skipped", SetupState::Skipped, job.clone()),
+            ("pending", SetupState::Pending, job),
+            ("chat", SetupState::Done, AgentConfig::default()),
+        ] {
+            store.insert_bot(bot(id, 1)).unwrap();
+            store.set_config(id, &config).unwrap();
+            store.set_setup(id, state, None).unwrap();
+        }
+        let mut ids: Vec<_> = store.scheduled_bots().into_iter().map(|b| b.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["job", "skipped"]);
     }
 
     #[test]

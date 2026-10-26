@@ -76,7 +76,13 @@ if (schema) {
       ? { questions: ["Which topics matter most to you?"] }
       : {
           instructions: `You write a short, friendly brief. ${prompt.match(/A: (.*)/)?.[1] ?? ""}`.trim(),
-          task: prompt.includes("Kind: daily job") ? "Write today's brief." : "",
+          task: prompt.includes("Kind: daily job")
+            ? "Write today's brief."
+            : prompt.includes("Kind: scheduled job")
+              ? "Check for new posts."
+              : prompt.includes("Kind: scheduled task")
+                ? "Do the task."
+                : "",
         };
   out({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(structured), structured_output: structured });
   process.exit(0);

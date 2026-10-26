@@ -1,8 +1,32 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { backend, errorText } from "../lib/api";
-import { type AgentConfig, type Bot, DEFAULT_SCHEDULE } from "../lib/types";
-import { DayPicker, FolderList, primaryButton, secondaryButton, textArea, TimeInput, Toggle } from "./fields";
+import { type AgentConfig, type Bot, dateSchedule, DEFAULT_EVERY, DEFAULT_SCHEDULE, type Schedule } from "../lib/types";
+import {
+  DatePicker,
+  DayPicker,
+  FolderList,
+  IntervalPicker,
+  primaryButton,
+  secondaryButton,
+  textArea,
+  TimeInput,
+  Toggle,
+  validEvery,
+} from "./fields";
 import { CloseIcon } from "./Icons";
+
+const KINDS = ["Daily", "Interval", "On a date"] as const;
+
+const kindOf = (s: Schedule): (typeof KINDS)[number] =>
+  s.everyMinutes !== null ? "Interval" : s.date !== null ? "On a date" : "Daily";
+
+/** What switching a job to `kind` changes. */
+const switchTo = (kind: (typeof KINDS)[number]): Partial<Schedule> =>
+  kind === "Interval"
+    ? { everyMinutes: DEFAULT_EVERY, date: null, monthly: false }
+    : kind === "On a date"
+      ? { everyMinutes: null, date: dateSchedule().date, monthly: false }
+      : { everyMinutes: null, date: null, monthly: false };
 
 /** Edits a bot's `AgentConfig`; opened by clicking the chat header. */
 export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: boolean; onClose: () => void }) {
@@ -71,19 +95,53 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
           />
         </Section>
 
-        <Section label="Daily job">
+        <Section label="Scheduled job">
           <Toggle
             checked={!!schedule}
             onChange={(on) => set({ schedule: on ? { ...DEFAULT_SCHEDULE, task: draft.description } : null })}
           >
-            Run a job every day while Kbot is open
+            Run a job by itself while Kbot is open
           </Toggle>
           {schedule && (
             <>
-              <div className="flex flex-wrap items-center gap-3">
-                <TimeInput value={schedule.time} onChange={(time) => setSchedule({ time })} />
-                <DayPicker days={schedule.days} onChange={(days) => setSchedule({ days })} />
+              <div className="flex gap-1.5" role="group" aria-label="Runs">
+                {KINDS.map((kind) => {
+                  const on = kindOf(schedule) === kind;
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => !on && setSchedule(switchTo(kind))}
+                      className={`h-7 rounded-full px-3 text-[12.5px] font-medium ${
+                        on ? "bg-ink-strong text-white" : "border border-button-line bg-white text-subtle"
+                      }`}
+                    >
+                      {kind}
+                    </button>
+                  );
+                })}
               </div>
+              {schedule.date !== null ? (
+                <DatePicker date={schedule.date} monthly={schedule.monthly} onChange={setSchedule}>
+                  <TimeInput value={schedule.time} onChange={(time) => setSchedule({ time })} />
+                </DatePicker>
+              ) : schedule.everyMinutes === null ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <TimeInput value={schedule.time} onChange={(time) => setSchedule({ time })} />
+                  <DayPicker days={schedule.days} onChange={(days) => setSchedule({ days })} />
+                </div>
+              ) : (
+                <>
+                  {/* Keyed so a reset draft doesn't keep the picker's custom amount. */}
+                  <IntervalPicker
+                    key={`${bot.id}:${bot.config.schedule?.everyMinutes}`}
+                    minutes={schedule.everyMinutes}
+                    onChange={(everyMinutes) => setSchedule({ everyMinutes })}
+                  />
+                  <DayPicker days={schedule.days} onChange={(days) => setSchedule({ days })} />
+                </>
+              )}
               <Toggle checked={schedule.notify} onChange={(notify) => setSchedule({ notify })}>
                 Notify me when it's done
               </Toggle>
@@ -110,7 +168,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
           <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
         </Section>
 
-        <Section label="Model" hint="A Claude Code model name, like sonnet or opus. Empty uses Claude Code's default.">
+        <Section label="Model" hint="A Claude Code model name, like sonnet or opus. Empty uses the default model from Kbot Settings.">
           <input
             value={draft.model ?? ""}
             placeholder="Default"
@@ -126,7 +184,12 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
       <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">
         <button
           type="button"
-          disabled={!dirty || busy}
+          disabled={
+            !dirty ||
+            busy ||
+            (schedule?.everyMinutes != null && !validEvery(schedule.everyMinutes)) ||
+            schedule?.date === ""
+          }
           onClick={() => void act(() => backend.updateBotConfig(bot.id, draft))}
           className={primaryButton}
         >

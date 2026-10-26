@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { ChatView } from "./components/ChatView";
 import { ConnectClaude } from "./components/ConnectClaude";
 import { NewBotModal } from "./components/NewBotModal";
 import { Sidebar } from "./components/Sidebar";
+import { backend } from "./lib/api";
 import { useBots, useClaudeStatus, useRunning } from "./lib/hooks";
 
 export default function App() {
@@ -11,6 +13,7 @@ export default function App() {
   const claude = useClaudeStatus();
   const [selectedId, setSelectedId] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Open on the most recently active bot, also when the open one is deleted.
   useEffect(() => {
@@ -19,16 +22,25 @@ export default function App() {
     setSelectedId(bots.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a)).id);
   }, [bots, selectedId]);
 
-  // ⌘N / Ctrl+N: new bot
+  // ⌘N / Ctrl+N: new bot. ⌘, / Ctrl+,: settings (on macOS the menu bar's
+  // Kbot > Settings… catches ⌘, first and sends `kbot://open-settings`).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key.toLowerCase() === "n") {
         e.preventDefault();
         setCreating(true);
+      } else if (e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const offSettings = backend.onOpenSettings(() => setSettingsOpen(true));
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      offSettings();
+    };
   }, []);
 
   const selected = bots.find((b) => b.id === selectedId);
@@ -65,6 +77,7 @@ export default function App() {
           }}
         />
       )}
+      {settingsOpen && <AppSettingsDialog onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

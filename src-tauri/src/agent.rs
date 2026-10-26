@@ -12,15 +12,16 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::claude::{self, ClaudeStatus, Event, Exit, RunSpec, Session, Tools};
 use crate::events;
-use crate::models::{AgentConfig, Bot, Message, MessageBody, PermissionStatus, Question, Weekday};
+use crate::models::{AgentConfig, Bot, Message, MessageBody, PermissionStatus, Question, Schedule, Weekday};
 use crate::runs::Ticket;
 use crate::AppState;
 
 pub enum Trigger {
     UserMessage(String),
     ComputerHandback,
-    /// The bot's daily job; `manual` = "Run now" rather than the scheduler.
-    DailyJob { manual: bool },
+    /// The bot's scheduled job; `manual` = "Run now" rather than the scheduler,
+    /// `late` = when a missed one-time task was due ("today at 09:30").
+    Job { manual: bool, late: Option<String> },
 }
 
 /// Appends a message to a bot's chat and tells the UI.
@@ -41,6 +42,12 @@ pub fn post(app: &AppHandle, bot_id: &str, body: MessageBody) -> Option<Message>
 /// Empty working directory of a bot's Claude process.
 pub fn workdir(app: &AppHandle, bot_id: &str) -> PathBuf {
     app.state::<AppState>().data_dir.join("agents").join(bot_id)
+}
+
+/// The `--model` a bot runs with: its own, else the default from Kbot > Settings….
+pub fn model(app: &AppHandle, bot: &Bot) -> String {
+    let default = || app.state::<AppState>().store.lock().unwrap().app_settings().default_model;
+    bot.config.model.clone().unwrap_or_else(default)
 }
 
 /// The `claude` binary, once Claude Code is installed and signed in with a subscription.
@@ -73,12 +80,18 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
     let bot_id = ticket.bot_id.as_str();
     let state = app.state::<AppState>();
     let bot = state.store.lock().unwrap().bot(bot_id)?;
-    if let Trigger::DailyJob { manual } = trigger {
-        let when = match (&bot.config.schedule, manual) {
-            (Some(schedule), false) => schedule.time.clone(),
-            _ => "Run now".into(),
+    if let (Trigger::Job { manual, late }, Some(schedule)) = (&trigger, &bot.config.schedule) {
+        let (job, at) = match (schedule.every_minutes, schedule.date.is_some()) {
+            (Some(n), _) => (format!("Every {}", describe_every(n)), Local::now().format("%H:%M").to_string()),
+            (None, true) => ("Scheduled task".to_string(), schedule.time.clone()),
+            (None, false) => ("Daily job".to_string(), schedule.time.clone()),
         };
-        post(app, bot_id, MessageBody::System { text: format!("Daily job \u{b7} {when}") });
+        let when = match (manual, late) {
+            (true, _) => "Run now".to_string(),
+            (false, Some(due)) => format!("Due {due}, running late"),
+            (false, None) => at,
+        };
+        post(app, bot_id, MessageBody::System { text: format!("{job} \u{b7} {when}") });
     }
     let bin = ready_binary(app).await?;
 
@@ -93,12 +106,12 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         session,
         tools: tools(&bot.config),
         add_dirs: bot.config.workspace_folders.clone(),
-        model: bot.config.model.clone(),
+        model: Some(model(app, &bot)),
         json_schema: None,
         cwd: workdir(app, bot_id),
     };
     let mut input = ticket.input.lock().await;
-    let job = matches!(trigger, Trigger::DailyJob { .. });
+    let job = matches!(trigger, Trigger::Job { .. });
     loop {
         let mut reply = Reply::new(app, &bot, job);
         let exit = claude::run(&bin, &spec, ticket.cancel.clone(), Some(&mut *input), |e| reply.on_event(e)).await;
@@ -145,7 +158,7 @@ struct Reply<'a> {
     app: &'a AppHandle,
     bot_id: &'a str,
     bot_name: &'a str,
-    /// A daily job that should notify the user (result, or waiting for an answer).
+    /// A scheduled job that should notify the user (result, or waiting for an answer).
     notify: bool,
     /// Permission cards posted during this run.
     asked: Vec<String>,
@@ -403,12 +416,25 @@ pub fn system_prompt(bot: &Bot) -> String {
         (instructions, _) => s += &format!("{instructions}\n"),
     }
     if let Some(schedule) = &config.schedule {
-        s += &format!(
-            "\n# Daily job\n\nEvery day ({days}) at {time} local time you run this task by yourself and post the result in this chat:\n\n{task}\n\nThe user may ask follow-up questions about a result.\n",
-            days = describe_days(&schedule.days),
-            time = schedule.time,
-            task = schedule.task.trim(),
-        );
+        let task = schedule.task.trim();
+        let days = describe_days(&schedule.days);
+        s += &match schedule.every_minutes {
+            None if schedule.date.is_some() => format!(
+                "\n# Scheduled task\n\n{when} at {time} local time you run this task by yourself and post the result in this chat:\n\n{task}\n\nThe user may ask follow-up questions about a result.\n",
+                when = capitalize(&describe_date(schedule).unwrap_or_default()),
+                time = schedule.time,
+            ),
+            None => format!(
+                "\n# Daily job\n\nEvery day ({days}) at {time} local time you run this task by yourself and post the result in this chat:\n\n{task}\n\nThe user may ask follow-up questions about a result.\n",
+                time = schedule.time,
+            ),
+            Some(n) => format!(
+                "\n# Scheduled job\n\nEvery {every} ({days}) you run this task by yourself and post the result in this chat:\n\n{task}\n\n\
+                 Runs come often: if nothing changed or needs the user's attention since the last run, say so in one short line. \
+                 The user may ask follow-up questions about a result.\n",
+                every = describe_every(n),
+            ),
+        };
     }
     s += "\n# Access\n\n";
     s += "You can use all of your tools without asking: run shell commands, and read, create and change files anywhere on this computer. \
@@ -441,13 +467,56 @@ where
     let body = match trigger {
         Trigger::UserMessage(text) => text.clone(),
         Trigger::ComputerHandback => "I'm done. You have control again.".into(),
-        Trigger::DailyJob { .. } => {
+        Trigger::Job { late, .. } => {
             let task = config.schedule.as_ref().map(|s| s.task.trim()).unwrap_or_default();
             let task = if task.is_empty() { config.description.trim() } else { task };
-            format!("It's time for your daily job. Do it now and post the result.\n\n{task}")
+            let job = match config.schedule.as_ref().map(|s| (s.every_minutes, s.date.is_some())) {
+                Some((None, true)) => "scheduled task",
+                Some((Some(_), _)) => "scheduled job",
+                _ => "daily job",
+            };
+            match late {
+                Some(due) => format!("Your {job} was due {due} and is running late. Do it now and post the result.\n\n{task}"),
+                None => format!("It's time for your {job}. Do it now and post the result.\n\n{task}"),
+            }
         }
     };
     format!("{time}\n\n{body}")
+}
+
+/// "15 min", "1 hour", "2 hours" or "90 min".
+pub fn describe_every(minutes: u32) -> String {
+    match minutes / 60 {
+        1 if minutes == 60 => "1 hour".into(),
+        h if minutes % 60 == 0 => format!("{h} hours"),
+        _ => format!("{minutes} min"),
+    }
+}
+
+/// "once on Fri, Oct 30, 2026" or "monthly on the 30th"; `None` unless it's a task on a date.
+pub fn describe_date(schedule: &Schedule) -> Option<String> {
+    let date = schedule.parsed_date()?;
+    Some(match schedule.monthly {
+        true => format!("monthly on the {}", ordinal(chrono::Datelike::day(&date))),
+        false => format!("once on {}", date.format("%a, %b %-d, %Y")),
+    })
+}
+
+/// "1st", "2nd", "11th", "23rd".
+pub fn ordinal(n: u32) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 /// "every day", "weekdays" or "Mon, Wed, Fri".
@@ -538,6 +607,20 @@ mod tests {
         assert!(prompt.contains("- /Users/me/notes"));
         assert!(prompt.contains("You cannot access the web."));
         assert!(system_prompt(&bot(AgentConfig::default())).contains("No specific instructions yet"));
+        let interval = system_prompt(&bot(AgentConfig {
+            schedule: Some(Schedule { every_minutes: Some(15), task: "Check the build".into(), ..Schedule::default() }),
+            ..AgentConfig::default()
+        }));
+        assert!(interval.contains("Every 15 min (every day) you run this task"));
+        assert!(interval.contains("Check the build"));
+        let dated = |monthly| {
+            system_prompt(&bot(AgentConfig {
+                schedule: Some(Schedule { monthly, task: "Pay rent".into(), ..Schedule::on_date(chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()) }),
+                ..AgentConfig::default()
+            }))
+        };
+        assert!(dated(false).contains("Once on Sun, Nov 1, 2026 at 08:00 local time you run this task"));
+        assert!(dated(true).contains("Monthly on the 1st at 08:00 local time you run this task"));
     }
 
     #[test]
@@ -547,9 +630,12 @@ mod tests {
             schedule: Some(Schedule { task: "Brief me".into(), ..Schedule::default() }),
             ..AgentConfig::default()
         };
-        let p = prompt(&Trigger::DailyJob { manual: false }, &config, now);
+        let p = prompt(&Trigger::Job { manual: false, late: None }, &config, now);
         assert!(p.starts_with("[Monday, October 26, 2026, 08:00 (UTC+07:00)]"));
+        assert!(p.contains("It's time for your daily job"));
         assert!(p.ends_with("Brief me"));
+        let late = Trigger::Job { manual: false, late: Some("yesterday at 09:30".into()) };
+        assert!(prompt(&late, &config, now).contains("Your daily job was due yesterday at 09:30 and is running late."));
         assert!(prompt(&Trigger::UserMessage("hi".into()), &config, now).ends_with("\n\nhi"));
     }
 
@@ -557,6 +643,10 @@ mod tests {
     fn days_and_activity_labels() {
         assert_eq!(describe_days(&Weekday::ALL), "every day");
         assert_eq!(describe_days(&[Weekday::Mon, Weekday::Fri]), "Mon, Fri");
+        let every: Vec<_> = [15, 60, 90, 120].map(describe_every).into();
+        assert_eq!(every, ["15 min", "1 hour", "90 min", "2 hours"]);
+        let nth: Vec<_> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 31].map(ordinal).into();
+        assert_eq!(nth, ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "31st"]);
         let read = serde_json::json!({"file_path": "/Users/me/notes/todo.md"});
         assert_eq!(activity("Read", &read), "Reading todo.md\u{2026}");
         let fetch = serde_json::json!({"url": "https://news.ycombinator.com/item?id=1"});

@@ -6,7 +6,7 @@ use crate::agent::{self, Trigger};
 use crate::claude::{self, ClaudeStatus};
 use crate::events;
 use crate::models::{
-    AgentConfig, Avatar, Bot, BotIcon, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
+    AgentConfig, AppSettings, Avatar, Bot, BotIcon, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
     SetupState,
 };
 use crate::setup;
@@ -265,16 +265,14 @@ pub fn update_bot_config(app: AppHandle, state: State<AppState>, bot_id: String,
     config.workspace_folders = setup::dedupe(config.workspace_folders);
     config.model = config.model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
     if let Some(schedule) = &config.schedule {
-        if !setup::valid_time(&schedule.time) {
-            return Err(format!("{} is not a valid time", schedule.time));
-        }
-        if schedule.days.is_empty() {
-            return Err("Pick at least one day".into());
-        }
+        schedule.validate()?;
     }
     let bot = {
         let store = state.store.lock().unwrap();
         let old = store.bot(&bot_id)?;
+        if let Some(schedule) = &config.schedule {
+            crate::scheduler::check_date(schedule, old.config.schedule.as_ref(), chrono::Local::now())?;
+        }
         if old.config != config {
             store.set_config(&bot_id, &config)?;
             // A resumed session keeps its first system prompt, so the new
@@ -292,10 +290,27 @@ pub fn update_bot_config(app: AppHandle, state: State<AppState>, bot_id: String,
 pub fn run_now(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {
     let bot = state.store.lock().unwrap().bot(&bot_id)?;
     if bot.config.schedule.is_none() {
-        return Err("This bot has no daily job.".into());
+        return Err("This bot has no scheduled job.".into());
     }
     let ticket = state.runs.start(&app, &bot_id).ok_or(BUSY)?;
     state.store.lock().unwrap().set_last_run_at(&bot_id, chrono::Local::now().timestamp_millis())?;
-    agent::spawn(app, ticket, Trigger::DailyJob { manual: true });
+    agent::spawn(app, ticket, Trigger::Job { manual: true, late: None });
     Ok(())
+}
+
+/// Kbot > Settings….
+#[tauri::command]
+pub fn get_app_settings(state: State<AppState>) -> AppSettings {
+    state.store.lock().unwrap().app_settings()
+}
+
+#[tauri::command]
+pub fn update_app_settings(state: State<AppState>, settings: AppSettings) -> CmdResult<AppSettings> {
+    let default_model = settings.default_model.trim();
+    if default_model.is_empty() {
+        return Err("Choose a model".into());
+    }
+    let store = state.store.lock().unwrap();
+    store.set_app_settings(&AppSettings { default_model: default_model.to_string() })?;
+    Ok(store.app_settings())
 }

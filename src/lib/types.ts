@@ -51,7 +51,7 @@ export interface Bot {
   preview: string;
   setupState: SetupState;
   config: AgentConfig;
-  /** Last daily job run, epoch ms. */
+  /** Last scheduled job run, epoch ms. */
   lastRunAt: number | null;
   /** A set-up bot is being changed with `/setup`. */
   editing: boolean;
@@ -63,9 +63,16 @@ export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as con
 export type Weekday = (typeof WEEKDAYS)[number];
 
 export interface Schedule {
-  /** Local "HH:MM". */
+  /** Local "HH:MM" of a daily job or a task on a date; unused on an interval. */
   time: string;
+  /** Daily or on an interval; unused on a date. */
   days: Weekday[];
+  /** null = once a day at `time`, or on `date`; n = every n minutes. */
+  everyMinutes: number | null;
+  /** "YYYY-MM-DD": a task that runs on this date at `time` instead of daily. */
+  date: string | null;
+  /** A task on a date repeats every month on that day of the month. */
+  monthly: boolean;
   task: string;
   notify: boolean;
 }
@@ -77,11 +84,47 @@ export interface AgentConfig {
   schedule: Schedule | null;
   workspaceFolders: string[];
   webAccess: boolean;
-  /** Claude Code `--model`; null = CLI default. */
+  /** Claude Code `--model`; null = `AppSettings.defaultModel`. */
   model: string | null;
 }
 
-export const DEFAULT_SCHEDULE: Schedule = { time: "08:00", days: [...WEEKDAYS], task: "", notify: true };
+/** Claude Code `--model` for bots that don't pick their own. */
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
+
+/** App-wide preferences, edited in Kbot > Settings…. */
+export interface AppSettings {
+  /** Claude Code `--model` for bots whose `AgentConfig.model` is null. */
+  defaultModel: string;
+}
+
+export const DEFAULT_SCHEDULE: Schedule = {
+  time: "08:00",
+  days: [...WEEKDAYS],
+  everyMinutes: null,
+  date: null,
+  monthly: false,
+  task: "",
+  notify: true,
+};
+
+/** Mirrors `Schedule::MIN_EVERY`, `MAX_EVERY` and `DEFAULT_EVERY`. */
+export const MIN_EVERY = 5;
+export const MAX_EVERY = 24 * 60;
+export const DEFAULT_EVERY = 30;
+
+/** Mirrors `Schedule::interval`: no notification every few minutes. */
+export const INTERVAL_SCHEDULE: Schedule = { ...DEFAULT_SCHEDULE, everyMinutes: DEFAULT_EVERY, notify: false };
+
+/** A local date as "YYYY-MM-DD". */
+export const isoDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/** A new task on a date, tomorrow at the default time, like setup's "Schedule a task". */
+export function dateSchedule(): Schedule {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return { ...DEFAULT_SCHEDULE, date: isoDate(tomorrow) };
+}
 
 export const EMPTY_CONFIG: AgentConfig = {
   description: "",
@@ -100,7 +143,16 @@ export type MessageBody =
   | { type: "system"; text: string }
   | { type: "computer"; prompt: string; control: Control }
   | { type: "setupChoice"; step: string; question: string; options: string[]; selected: string | null }
-  | { type: "setupSchedule"; time: string; days: Weekday[]; notify: boolean; submitted: boolean }
+  | {
+      type: "setupSchedule";
+      time: string;
+      days: Weekday[];
+      everyMinutes: number | null;
+      date: string | null;
+      monthly: boolean;
+      notify: boolean;
+      submitted: boolean;
+    }
   | { type: "setupFolders"; folders: string[]; submitted: boolean }
   | {
       type: "setupReview";
@@ -150,7 +202,15 @@ export interface MessageEvent {
 /** Answer to an onboarding card (`answer_setup`). */
 export type SetupAnswer =
   | { type: "choice"; option: string }
-  | { type: "schedule"; time: string; days: Weekday[]; notify: boolean }
+  | {
+      type: "schedule";
+      time: string;
+      days: Weekday[];
+      everyMinutes: number | null;
+      date: string | null;
+      monthly: boolean;
+      notify: boolean;
+    }
   | { type: "folders"; folders: string[] }
   | { type: "review"; instructions: string; task: string | null };
 

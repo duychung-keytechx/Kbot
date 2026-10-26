@@ -12,7 +12,7 @@ import type {
   AgentConfig,
   AppSettings,
   Bot,
-  BotIcon,
+  BotImage,
   ClaudeStatus,
   Control,
   Message,
@@ -25,7 +25,7 @@ import type {
 export interface Backend {
   listBots(): Promise<Bot[]>;
   getMessages(botId: string): Promise<Message[]>;
-  createBot(name: string, icon: BotIcon, color: string): Promise<Bot>;
+  createBot(name: string, image: BotImage): Promise<Bot>;
   sendMessage(botId: string, text: string): Promise<Message>;
   setComputerControl(botId: string, messageId: string, control: Control): Promise<Message>;
   answerPermission(botId: string, messageId: string, answer: PermissionAnswer): Promise<Message>;
@@ -37,8 +37,6 @@ export interface Backend {
   answerSetup(botId: string, messageId: string, answer: SetupAnswer): Promise<Message>;
   skipSetup(botId: string): Promise<void>;
   /** Leaves `/setup` on a set-up bot without saving. */
-  /** "Edit" in a bot's menu; the same as sending `/setup`. */
-  startSetup(botId: string): Promise<void>;
   exitSetup(botId: string): Promise<void>;
   redoSetup(botId: string): Promise<void>;
   /** Deletes the bot's chat history; a bot still being set up starts setup over. */
@@ -46,6 +44,7 @@ export interface Backend {
   /** Deletes the bot with its history and settings. */
   deleteBot(botId: string): Promise<void>;
   updateBotConfig(botId: string, config: AgentConfig): Promise<Bot>;
+  renameBot(botId: string, name: string): Promise<Bot>;
   runNow(botId: string): Promise<void>;
   /** The chat on screen while the window is focused, else null; it is marked read. */
   setViewing(botId: string | null): Promise<void>;
@@ -73,7 +72,7 @@ function subscribe<T>(event: string, cb: (payload: T) => void): () => void {
 const tauriBackend: Backend = {
   listBots: () => invoke("list_bots"),
   getMessages: (botId) => invoke("get_messages", { botId }),
-  createBot: (name, icon, color) => invoke("create_bot", { name, icon, color }),
+  createBot: (name, image) => invoke("create_bot", { name, image }),
   sendMessage: (botId, text) => invoke("send_message", { botId, text }),
   setComputerControl: (botId, messageId, control) =>
     invoke("set_computer_control", { botId, messageId, control }),
@@ -84,12 +83,12 @@ const tauriBackend: Backend = {
   ensureSetup: (botId) => invoke("ensure_setup", { botId }),
   answerSetup: (botId, messageId, answer) => invoke("answer_setup", { botId, messageId, answer }),
   skipSetup: (botId) => invoke("skip_setup", { botId }),
-  startSetup: (botId) => invoke("start_setup", { botId }),
   exitSetup: (botId) => invoke("exit_setup", { botId }),
   redoSetup: (botId) => invoke("redo_setup", { botId }),
   clearChat: (botId) => invoke("clear_chat", { botId }),
   deleteBot: (botId) => invoke("delete_bot", { botId }),
   updateBotConfig: (botId, config) => invoke("update_bot_config", { botId, config }),
+  renameBot: (botId, name) => invoke("rename_bot", { botId, name }),
   runNow: (botId) => invoke("run_now", { botId }),
   setViewing: (botId) => invoke("set_viewing", { botId }),
   getAppSettings: () => invoke("get_app_settings"),

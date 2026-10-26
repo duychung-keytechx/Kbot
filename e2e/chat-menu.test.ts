@@ -33,7 +33,7 @@ test("clearing a chat deletes its messages and starts a new Claude session", asy
   const session = await launch(dataDir, { FAKE_CLAUDE_LOG: log });
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Skip setup")).click();
     await send(browser, name, "hello there");
@@ -48,7 +48,7 @@ test("clearing a chat deletes its messages and starts a new Claude session", asy
 
     // A bot still being set up starts its setup over.
     const pending = "Pending Bot";
-    await createBot(browser, pending, "buddy", "#16B364");
+    await createBot(browser, pending, "bot02");
     await waitForText(browser, `Hi, I'm ${pending}!`);
     await browser.$(button("Chat with me")).click();
     await waitForText(browser, "Describe what I should do.");
@@ -94,8 +94,8 @@ test("deleting a chat removes the bot, its Claude Code state, and opens another 
   const session = await launch(dataDir, { FAKE_CLAUDE_LOG: log });
   try {
     const { browser } = session;
-    await createBot(browser, "Keep Bot", "buddy", "#16B364");
-    await createBot(browser, "Delete Bot", "happy", "#1A73F0");
+    await createBot(browser, "Keep Bot", "bot02");
+    await createBot(browser, "Delete Bot");
     await waitForText(browser, "Hi, I'm Delete Bot!");
 
     // Cancel keeps it.

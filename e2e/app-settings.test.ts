@@ -25,7 +25,7 @@ test("runs use Sonnet 5.5 until another default model is saved", async () => {
   const session = await launch(dataDir, { FAKE_CLAUDE_LOG: log });
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Skip setup")).click();
     await send(browser, name, "first");

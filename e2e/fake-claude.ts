@@ -7,7 +7,8 @@
 // - `purge --yes <path>`: does nothing and succeeds.
 // - `-p ... --json-schema <schema>`: onboarding helpers; one clarifying
 //   question, then instructions built from the prompt. A `/setup` change
-//   appends the request to the instructions and takes any "HH:MM" as the time.
+//   "rename yourself to <name>" renames the bot; any other appends the
+//   request to the instructions and takes any "HH:MM" as the time.
 // - `-p ...`: a streamed reply quoting the last line of the prompt. A prompt
 //   ending in "ask me" first asks "Coffee or tea?" with AskUserQuestion; one
 //   ending in "needs approval" first asks to run a Bash command. Both wait for
@@ -68,6 +69,8 @@ if (schema) {
     ? (() => {
         const current = JSON.parse(edit[1]);
         const request = edit[2].trim();
+        const name = request.match(/^rename yourself to (.+)$/i)?.[1];
+        if (name) return { ...current, name, note: `I'm ${name} now.` };
         return {
           ...current,
           instructions: `${current.instructions} ${request}`,

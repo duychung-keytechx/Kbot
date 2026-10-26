@@ -6,7 +6,7 @@
 Kbot is more than a chatbot. It lets anyone build <b>personal agents</b> shaped
 around their own needs: a sales assistant that finds leads, a recruiter that
 screens candidates, a researcher that digs through the web. Each one is yours to
-name, style and put to work, right from your desktop.
+name, give a picture and put to work, right from your desktop.
 </p>
 
 | Build your agent | Put it to work |
@@ -39,9 +39,12 @@ using your own Claude subscription. Built with [Tauri 2](https://tauri.app)
   it wrote for itself for you to confirm or edit.
 - **`/setup`.** Type it in the chat to see the agent's current setup, then say
   what to change in your own words ("run at 7:00 on weekdays", "turn off web
-  search"). Claude updates the setup and shows it to you before saving. On an
-  agent that isn't set up yet, `/setup` starts the setup. **Edit** in the
-  agent's right-click menu does the same.
+  search", "rename yourself to Week Planner"). Claude updates the setup and
+  shows it to you before saving. On an agent that isn't set up yet, `/setup`
+  starts the setup.
+- **Edit.** Right-click an agent in the sidebar and choose **Edit** to change
+  its name, description, instructions, folders and web search in a dialog,
+  without going through the chat.
 - **Scheduled jobs.** A job runs at its set time on the chosen days, every few
   minutes or hours, or as a task on a date (once, or every month on that day;
   on the 29th–31st it runs on the last day of shorter months). It posts the
@@ -52,6 +55,11 @@ using your own Claude subscription. Built with [Tauri 2](https://tauri.app)
 - **Settings.** Click the agent's name above the chat to change its
   instructions, schedule, web access, folders or model, run the job now, or redo
   the setup.
+- **Pictures.** A new agent starts with one of 20 bot pictures, picked at
+  random; pick another in the "Create New Bot" dialog. Agents made before
+  keep their icon and color.
+- **Resizable sidebar.** Drag the sidebar's right edge to make it wider or
+  narrower; double-click it to restore the default width.
 - **Clear or delete.** Right-click an agent in the sidebar to clear its chat
   history (it also forgets the conversation) or delete it.
 - **Full access.** Agents run Claude Code with all its tools and
@@ -164,5 +172,5 @@ To regenerate the screenshots above: `npm run screenshots`.
 
 Kbot is released under the [MIT License](LICENSE).
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the bot icon sets and
-their licenses.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the bot pictures, the
+bot icon sets and their licenses.

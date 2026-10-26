@@ -47,8 +47,13 @@ pub enum Step {
     Clarify { questions: Vec<String>, answers: Vec<String> },
     Review,
     /// `/setup` on a set-up bot: waiting for a change request, or for the
-    /// user to save `draft`, the config with the changes so far.
-    Edit { draft: AgentConfig },
+    /// user to save `draft`, the config with the changes so far, and `name`,
+    /// the bot's new name if the changes rename it.
+    Edit {
+        draft: AgentConfig,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,8 +61,13 @@ pub enum Step {
 pub enum Generate {
     Questions,
     Review { clarifications: Vec<(String, String)> },
-    /// Apply the user's `request` to `draft`.
-    Edit { request: String, draft: AgentConfig },
+    /// Apply the user's `request` to `draft` and `name` (as in `Step::Edit`).
+    Edit {
+        request: String,
+        draft: AgentConfig,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
 impl Step {
@@ -146,10 +156,10 @@ pub fn apply(step: &Step, input: Input, config: &mut AgentConfig) -> Result<Next
             }
             Next::Done
         }
-        (Step::Edit { draft }, Input::Text(request)) => {
-            Next::Generate(Generate::Edit { request, draft: draft.clone() })
+        (Step::Edit { draft, name }, Input::Text(request)) => {
+            Next::Generate(Generate::Edit { request, draft: draft.clone(), name: name.clone() })
         }
-        (Step::Edit { draft }, Input::Card(A::Review { instructions, task })) => {
+        (Step::Edit { draft, .. }, Input::Card(A::Review { instructions, task })) => {
             *config = draft.clone();
             return apply(&Step::Review, Input::Card(A::Review { instructions, task }), config);
         }
@@ -263,7 +273,7 @@ pub fn command(app: &AppHandle, bot_id: &str) -> Result<(), String> {
         return restart(app, bot_id);
     }
     discard_changes(app, bot_id)?;
-    enter(app, &bot, Step::Edit { draft: bot.config.clone() })?;
+    enter(app, &bot, Step::Edit { draft: bot.config.clone(), name: None })?;
     post(app, bot_id, MessageBody::SetupCurrent { config: bot.config });
     Ok(())
 }
@@ -358,7 +368,13 @@ fn advance(app: &AppHandle, bot_id: &str, input: Input) -> Result<(), String> {
             generate(app.clone(), ticket, what);
             Ok(())
         }
-        Next::Done => finish(app, &bot, matches!(step, Step::Edit { .. })),
+        Next::Done => {
+            if let Step::Edit { name: Some(name), .. } = &step {
+                store_op(app, |s| s.set_name(bot_id, name))?;
+                bot.name = name.clone();
+            }
+            finish(app, &bot, matches!(step, Step::Edit { .. }))
+        }
     }
 }
 
@@ -412,7 +428,8 @@ fn enter(app: &AppHandle, bot: &Bot, step: Step) -> Result<(), String> {
             }
         }
         Step::Review => {
-            MessageBody::SetupReview { config: config.clone(), confirmed: false, previous: None, discarded: false }
+            let config = config.clone();
+            MessageBody::SetupReview { config, confirmed: false, previous: None, name: None, discarded: false }
         }
         Step::Generating { .. } => return Ok(()),
         // Its cards are posted by `command` and `run_generate`.
@@ -538,12 +555,14 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
             store_op(app, |s| s.set_config(bot_id, &config))?;
             (Step::Review, Vec::new())
         }
-        Generate::Edit { request, draft } => {
-            let result = ask(EDIT_PROMPT.into(), describe_edit(&bot, draft, request), edit_schema()).await;
+        Generate::Edit { request, draft, name } => {
+            let name = name.as_deref().unwrap_or(&bot.name);
+            let result = ask(EDIT_PROMPT.into(), describe_edit(name, draft, request), edit_schema()).await;
             match result {
                 Ok(v) => {
                     let is_dir = |p: &str| Path::new(p).is_absolute() && Path::new(p).is_dir();
                     let (mut config, mut note) = apply_edit(draft, &v, is_dir);
+                    let name = Some(edit_name(name, &v)).filter(|n| *n != bot.name);
                     let now = chrono::Local::now();
                     if let Some(Err(e)) =
                         config.schedule.as_ref().map(|s| crate::scheduler::check_date(s, draft.schedule.as_ref(), now))
@@ -555,7 +574,7 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
                     if !note.is_empty() {
                         follow_up.push(MessageBody::Agent { text: note });
                     }
-                    if config == bot.config {
+                    if config == bot.config && name.is_none() {
                         if follow_up.is_empty() {
                             follow_up.push(MessageBody::Agent { text: "That's how I'm set up already.".into() });
                         }
@@ -564,17 +583,19 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
                             config: config.clone(),
                             confirmed: false,
                             previous: Some(bot.config.clone()),
+                            name: name.clone(),
                             discarded: false,
                         });
                     }
-                    (Step::Edit { draft: config }, follow_up)
+                    (Step::Edit { draft: config, name }, follow_up)
                 }
                 Err(e) => {
                     let text = match e.as_str() {
                         "stopped" => "Stopped".to_string(),
                         _ => format!("I couldn't change my setup: {e}"),
                     };
-                    (Step::Edit { draft: draft.clone() }, vec![MessageBody::System { text }])
+                    let name = Some(name.to_string()).filter(|n| *n != bot.name);
+                    (Step::Edit { draft: draft.clone(), name }, vec![MessageBody::System { text }])
                 }
             }
         }
@@ -625,10 +646,11 @@ fn describe_for_claude(bot: &Bot) -> String {
 }
 
 /// What Claude gets for a `/setup` change: the setup so far and the request.
-fn describe_edit(bot: &Bot, draft: &AgentConfig, request: &str) -> String {
+fn describe_edit(name: &str, draft: &AgentConfig, request: &str) -> String {
     // A chat agent shows the default schedule, used if it becomes a scheduled job.
     let schedule = draft.schedule.clone().unwrap_or_default();
     let current = json!({
+        "name": name,
         "description": draft.description,
         "instructions": draft.instructions,
         "scheduledJob": draft.schedule.is_some(),
@@ -643,7 +665,7 @@ fn describe_edit(bot: &Bot, draft: &AgentConfig, request: &str) -> String {
         "workspaceFolders": draft.workspace_folders,
     });
     let current = serde_json::to_string_pretty(&current).unwrap_or_default();
-    format!("Agent name: {}\n\nCurrent setup:\n{current}\n\nThe user's change request:\n{request}", bot.name)
+    format!("Current setup:\n{current}\n\nThe user's change request:\n{request}")
 }
 
 fn edit_schema() -> Value {
@@ -652,6 +674,7 @@ fn edit_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "name": text,
             "description": text,
             "instructions": text,
             "scheduledJob": flag,
@@ -666,7 +689,7 @@ fn edit_schema() -> Value {
             "workspaceFolders": {"type": "array", "items": {"type": "string"}},
             "note": text
         },
-        "required": ["description", "instructions", "scheduledJob", "everyMinutes", "time", "days", "date", "monthly", "notify", "task", "webAccess", "workspaceFolders", "note"],
+        "required": ["name", "description", "instructions", "scheduledJob", "everyMinutes", "time", "days", "date", "monthly", "notify", "task", "webAccess", "workspaceFolders", "note"],
         "additionalProperties": false
     })
 }
@@ -744,6 +767,12 @@ pub fn apply_edit(draft: &AgentConfig, v: &Value, is_dir: impl Fn(&str) -> bool)
     (config, notes.join("\n\n"))
 }
 
+/// The name Claude proposed for a `/setup` change, or `current` if it's
+/// missing or not a valid name.
+pub fn edit_name(current: &str, v: &Value) -> String {
+    v["name"].as_str().and_then(|n| Bot::clean_name(n).ok()).unwrap_or_else(|| current.to_string())
+}
+
 /// "~/notes" -> "/Users/me/notes".
 fn expand_home(path: &str) -> String {
     match (path.strip_prefix('~'), std::env::home_dir()) {
@@ -771,6 +800,7 @@ Write both in the language of the user's description.";
 const EDIT_PROMPT: &str = "You help a user change the setup of their personal AI agent in Kbot, a desktop app. \
 You get the agent's current setup as JSON and the user's change request. Return the whole setup with the request applied:\n\
 - Change only what the request asks for, plus whatever has to change with it. Copy everything else exactly.\n\
+- name: the agent's name, at most 60 characters.\n\
 - description: one or two sentences on what the agent does.\n\
 - instructions: the agent's instructions, addressed to the agent as \"you\". Concise and concrete, plain text, no Markdown headings. \
 Work a new preference into them rather than appending the request.\n\
@@ -782,7 +812,7 @@ notify: show a notification when a run finishes. task: what to do on each run, o
 - webAccess: whether it can search the web.\n\
 - workspaceFolders: absolute paths of folders it works with. Add or remove only folders the user names.\n\
 - note: one or two short sentences telling the user what you changed. If the request is unclear, or asks for something \
-the setup doesn't cover (like the agent's name or icon), change nothing and say so.\n\
+the setup doesn't cover (like the agent's icon), change nothing and say so.\n\
 Write the note, and any text you change, in the language of the user's request.";
 
 #[cfg(test)]
@@ -936,18 +966,30 @@ mod tests {
     fn edit_takes_requests_then_saves_the_draft() {
         let saved = AgentConfig { instructions: "Be brief.".into(), ..AgentConfig::default() };
         let draft = AgentConfig { instructions: "Be brief. Use bullets.".into(), web_access: true, ..saved.clone() };
-        let step = Step::Edit { draft: draft.clone() };
+        let step = Step::Edit { draft: draft.clone(), name: Some("Brief Bot".into()) };
         assert_eq!(step.state(), SetupState::Done);
         let mut config = saved.clone();
         assert_eq!(
             apply(&step, Input::Text("no web".into()), &mut config),
-            Ok(Next::Generate(Generate::Edit { request: "no web".into(), draft: draft.clone() }))
+            Ok(Next::Generate(Generate::Edit {
+                request: "no web".into(),
+                draft: draft.clone(),
+                name: Some("Brief Bot".into())
+            }))
         );
         assert_eq!(config, saved, "nothing changes before saving");
         let save = SetupAnswer::Review { instructions: " Use bullets. ".into(), task: None };
         assert_eq!(apply(&step, Input::Card(save), &mut config), Ok(Next::Done));
         assert_eq!(config, AgentConfig { instructions: "Use bullets.".into(), ..draft });
         assert!(apply(&step, choice(YES), &mut config).is_err());
+    }
+
+    #[test]
+    fn edit_name_keeps_a_name_that_doesnt_fit() {
+        assert_eq!(edit_name("Planner", &json!({"name": "  Week Planner "})), "Week Planner");
+        assert_eq!(edit_name("Planner", &json!({"name": "   "})), "Planner");
+        assert_eq!(edit_name("Planner", &json!({"name": "x".repeat(Bot::MAX_NAME + 1)})), "Planner");
+        assert_eq!(edit_name("Planner", &json!({})), "Planner");
     }
 
     #[test]
@@ -1018,8 +1060,11 @@ mod tests {
     #[test]
     fn step_round_trips_as_json() {
         let edit = Step::Generating {
-            what: Generate::Edit { request: "shorter".into(), draft: AgentConfig::default() },
+            what: Generate::Edit { request: "shorter".into(), draft: AgentConfig::default(), name: None },
         };
+        // Steps saved before renaming came in have no `name`.
+        let old = r#"{"step":"edit","draft":{"description":"","instructions":"","schedule":null,"workspaceFolders":[],"webAccess":false,"model":null}}"#;
+        assert_eq!(serde_json::from_str::<Step>(old).unwrap(), Step::Edit { draft: AgentConfig::default(), name: None });
         assert_eq!(serde_json::from_str::<Step>(&serde_json::to_string(&edit).unwrap()).unwrap(), edit);
         assert_eq!(edit.state(), SetupState::Done);
         assert_eq!(Step::Generating { what: Generate::Questions }.state(), SetupState::Pending);

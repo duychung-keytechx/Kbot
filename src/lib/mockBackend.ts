@@ -15,6 +15,7 @@ import {
   EMPTY_CONFIG,
   INTERVAL_SCHEDULE,
   MAX_EVERY,
+  MAX_NAME,
   MIN_EVERY,
   type Message,
   type MessageBody,
@@ -274,6 +275,7 @@ function enter(botId: string, step: Step) {
         config: structuredClone(config),
         confirmed: false,
         previous: null,
+        name: null,
         discarded: false,
       });
       break;
@@ -334,9 +336,11 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
     } else if (step === "edit") {
       discardChanges(botId);
       think(botId, () => {
+        // "Rename yourself to …" renames; anything else is added to the instructions.
+        const name = input.match(/^rename (?:yourself )?to (.+)$/i)?.[1].trim() ?? null;
         const draft = structuredClone(config);
-        draft.instructions = `${draft.instructions}\n\n${input}`;
-        push(botId, { type: "setupReview", config: draft, confirmed: false, previous: structuredClone(config), discarded: false });
+        if (!name) draft.instructions = `${draft.instructions}\n\n${input}`;
+        push(botId, { type: "setupReview", config: draft, confirmed: false, previous: structuredClone(config), name, discarded: false });
       });
     } else if (step === "clarify") {
       think(botId, () => {
@@ -385,6 +389,7 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
     case "setupReview":
       if (input.previous) {
         bot(botId).config = structuredClone(input.config);
+        if (input.name) bot(botId).name = input.name;
         finish(botId, true);
         break;
       }
@@ -398,11 +403,11 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
 export const mockBackend: Backend = {
   listBots: async () => structuredClone(bots),
   getMessages: async (botId) => structuredClone(conversations.get(botId) ?? []),
-  createBot: async (name, icon, color) => {
+  createBot: async (name, image) => {
     const b: Bot = {
       id: crypto.randomUUID(),
       name: name.trim(),
-      avatar: { kind: "icon", icon, color },
+      avatar: { kind: "image", image },
       pinned: false,
       updatedAt: Date.now(),
       preview: "",
@@ -507,10 +512,6 @@ export const mockBackend: Backend = {
     bot(botId).setupState = "skipped";
     push(botId, { type: "system", text: `Setup skipped. Type ${SETUP_COMMAND} any time to set me up.` });
   },
-  startSetup: async (botId) => {
-    if (running.has(botId)) throw new Error(BUSY);
-    setupCommand(botId);
-  },
   exitSetup: async (botId) => {
     if (steps.get(botId) !== "edit") return;
     running.get(botId)?.();
@@ -544,6 +545,14 @@ export const mockBackend: Backend = {
     conversations.delete(botId);
     steps.delete(botId);
     emitBots();
+  },
+  renameBot: async (botId, name) => {
+    const b = bot(botId);
+    if (!name.trim()) throw new Error("Bot name is required");
+    if (name.trim().length > MAX_NAME) throw new Error(`Bot name can be at most ${MAX_NAME} characters`);
+    b.name = name.trim();
+    emitBots();
+    return structuredClone(b);
   },
   updateBotConfig: async (botId, config: AgentConfig) => {
     const b = bot(botId);

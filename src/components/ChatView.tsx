@@ -65,7 +65,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
             className="-ml-1.5 flex min-w-0 items-center gap-2 rounded-[8px] px-1.5 py-1 hover:bg-row-hover"
           >
             <BotAvatar avatar={bot.avatar} size={18} />
-            <p className="truncate text-[13.5px] font-medium text-ink">{bot.name}</p>
+            <p className="truncate text-[13.5px] font-semibold text-ink">{bot.name}</p>
           </button>
           <div data-tauri-drag-region className="flex-1 self-stretch" />
           {isTask && (
@@ -128,7 +128,7 @@ function MessageItem({ botId, message }: { botId: string; message: Message }) {
     case "user":
       return (
         <div className="flex justify-end self-stretch">
-          <div className="rounded-2xl bg-ink-strong px-3.5 py-[11px]">
+          <div className="rounded-2xl bg-user-bubble px-3.5 py-[11px]">
             <p className="selectable max-w-[400px] text-[14px] leading-[21px] break-words whitespace-pre-wrap text-white">
               {message.text}
             </p>

@@ -19,6 +19,32 @@ export const BOT_SHAPES = [
 ] as const;
 export type BotShape = (typeof BOT_SHAPES)[number];
 
+/** The pictures offered when creating a bot (`src/assets/bots/<id>.png`). */
+export const BOT_IMAGES = [
+  "bot01",
+  "bot02",
+  "bot03",
+  "bot04",
+  "bot05",
+  "bot06",
+  "bot07",
+  "bot08",
+  "bot09",
+  "bot10",
+  "bot11",
+  "bot12",
+  "bot13",
+  "bot14",
+  "bot15",
+  "bot16",
+  "bot17",
+  "bot18",
+  "bot19",
+  "bot20",
+] as const;
+export type BotImage = (typeof BOT_IMAGES)[number];
+
+/** Robot glyphs of older bots, drawn in their color. */
 export const BOT_ICONS = [
   "classic",
   "happy",
@@ -39,6 +65,7 @@ export const BOT_ICONS = [
 export type BotIcon = (typeof BOT_ICONS)[number];
 
 export type Avatar =
+  | { kind: "image"; image: BotImage }
   | { kind: "icon"; icon: BotIcon; color: string }
   | { kind: "shape"; shape: BotShape; color: string };
 
@@ -89,6 +116,9 @@ export interface AgentConfig {
   /** Claude Code `--model`; null = `AppSettings.defaultModel`. */
   model: string | null;
 }
+
+/** Mirrors `Bot::MAX_NAME`. */
+export const MAX_NAME = 60;
 
 /** Claude Code `--model` for bots that don't pick their own. */
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
@@ -162,6 +192,8 @@ export type MessageBody =
       confirmed: boolean;
       /** Set on a change made with `/setup`: the saved config it would replace. */
       previous: AgentConfig | null;
+      /** The new name, when a `/setup` change renames the bot. */
+      name: string | null;
       /** Replaced by a newer change, or `/setup` was closed without saving. */
       discarded: boolean;
     }

@@ -1,21 +1,16 @@
 import { useEffect, useState } from "react";
 import { backend } from "../lib/api";
-import { BOT_ICONS, type Bot, type BotIcon } from "../lib/types";
-import { IconAvatar } from "./avatars/IconAvatar";
+import { BOT_IMAGES, type Bot, type BotImage } from "../lib/types";
+import { ImageAvatar } from "./avatars/ImageAvatar";
 import { CloseIcon } from "./Icons";
-
-const COLORS = [
-  ["#141414", "#9A5B34", "#F0263E", "#FF5A1F", "#F7931E", "#16B364"],
-  ["#12A89A", "#1A73F0", "#7C3AED", "#EC2D8C", "#8E8E8E"],
-];
 
 const rows = <T,>(items: readonly T[], size: number): T[][] =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 
 export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCreated: (bot: Bot) => void }) {
   const [name, setName] = useState("");
-  const [icon, setIcon] = useState<BotIcon>("classic");
-  const [color, setColor] = useState("#FF5A1F");
+  // A random picture, so new bots don't all start out looking the same.
+  const [image, setImage] = useState<BotImage>(() => BOT_IMAGES[Math.floor(Math.random() * BOT_IMAGES.length)]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canCreate = name.trim().length > 0 && !busy;
@@ -25,7 +20,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
     setBusy(true);
     setError(null);
     try {
-      onCreated(await backend.createBot(name, icon, color));
+      onCreated(await backend.createBot(name, image));
     } catch (e) {
       setError(String(e));
       setBusy(false);
@@ -66,7 +61,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
         </div>
 
         <div className="flex min-h-0 flex-col items-center gap-[22px] overflow-y-auto px-5 py-6">
-          <IconAvatar icon={icon} color={color} size={112} frame="preview" />
+          <ImageAvatar image={image} size={112} />
 
           <input
             autoFocus
@@ -78,46 +73,24 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
             className="h-[42px] shrink-0 self-stretch rounded-[10px] border border-composer-line bg-white px-3.5 py-2.5 text-center text-[14px] leading-[normal] text-ink"
           />
 
-          <div role="radiogroup" aria-label="Icon" className="flex flex-col gap-3 self-stretch">
-            {rows(BOT_ICONS, 5).map((row, i) => (
+          <div role="radiogroup" aria-label="Picture" className="flex flex-col gap-3 self-stretch">
+            {rows(BOT_IMAGES, 5).map((row, i) => (
               <div key={i} className="flex justify-center gap-4">
                 {row.map((s) => (
                   <button
                     key={s}
                     type="button"
                     role="radio"
-                    aria-checked={s === icon}
+                    aria-checked={s === image}
                     aria-label={s}
-                    onClick={() => setIcon(s)}
-                    className={`size-[52px] shrink-0 rounded-full ${
-                      s === icon
+                    onClick={() => setImage(s)}
+                    className={`flex size-[52px] shrink-0 items-center justify-center rounded-full ${
+                      s === image
                         ? "bg-white shadow-[inset_0_0_0_1.5px_var(--color-shape-selected),0_1px_3px_rgba(0,0,0,0.1)]"
                         : "hover:bg-bubble"
                     }`}
                   >
-                    <IconAvatar icon={s} color={color} size={52} frame="cell" />
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-
-          <div role="radiogroup" aria-label="Color" className="flex flex-col gap-2.5 self-stretch">
-            {COLORS.map((row, i) => (
-              <div key={i} className="flex justify-center gap-3">
-                {row.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    role="radio"
-                    aria-checked={c === color}
-                    aria-label={c}
-                    onClick={() => setColor(c)}
-                    className={`relative size-9 shrink-0 rounded-full ${
-                      c === color ? "bg-white shadow-[inset_0_0_0_1.5px_var(--color-swatch-selected)]" : ""
-                    }`}
-                  >
-                    <span className="absolute top-[5px] left-[5px] size-[26px] rounded-full" style={{ background: c }} />
+                    <ImageAvatar image={s} size={38} />
                   </button>
                 ))}
               </div>

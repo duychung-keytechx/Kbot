@@ -283,6 +283,38 @@ export function Toggle({
   );
 }
 
+/** An on/off switch at the end of a labelled row, as in macOS settings. */
+export function Switch({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="flex min-h-[46px] items-center justify-between gap-4 text-[13.5px] text-ink">
+      {children}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative h-[22px] w-[36px] shrink-0 rounded-full transition-colors ${
+          checked ? "bg-switch-on" : "bg-switch-off"
+        }`}
+      >
+        <span
+          className={`absolute top-[2px] left-[2px] size-[18px] rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.25)] transition-transform ${
+            checked ? "translate-x-[14px]" : ""
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
+
 /** Folder list with remove buttons and a native "Add folder" picker; `children` go next to it. */
 export function FolderList({
   folders,

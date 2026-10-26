@@ -14,6 +14,8 @@
   --color-main: #fbfbfa;
   --color-line: #e8e8e6;
   --color-bubble: #f0f0ee;
+  /* the user's own messages */
+  --color-user-bubble: #15803d;
 
   /* text */
   --color-ink: #1f1f1f;
@@ -28,6 +30,8 @@
   --color-unread: #1a73f0;
 
   /* fields & buttons */
+  --color-switch-on: #3478f6;
+  --color-switch-off: #e2e2e0;
   --color-field-line: #d9d9d7;
   --color-composer-line: #dcdcda;
   --color-button-line: #dadad8;
@@ -45,7 +49,6 @@
   --color-disabled: #e6e6e4;
   --color-disabled-ink: #a9a9a6;
   --color-shape-selected: #d6d6d4;
-  --color-swatch-selected: #cfcfcd;
 }
 
 @layer base {

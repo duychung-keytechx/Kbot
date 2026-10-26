@@ -16,14 +16,13 @@ try {
   await browser.$("//p[text()='No bots yet']").waitForDisplayed();
   await browser.saveScreenshot(join(OUT, "empty.png"));
 
-  await createBot(browser, "Research Bot", "cyclops", "#7C3AED");
-  await createBot(browser, "Recruiter", "buddy", "#16B364");
-  await createBot(browser, "Sales Assistant", "happy", "#1A73F0");
+  await createBot(browser, "Research Bot", "bot05");
+  await createBot(browser, "Recruiter", "bot02");
+  await createBot(browser, "Sales Assistant", "bot01");
 
   await browser.$('button[aria-label="New bot"]').click();
   await browser.$('input[placeholder="Name your bot"]').setValue("Support Bot");
-  await browser.$('[aria-label="Icon"] button[aria-label="bubble"]').click();
-  await browser.$('[aria-label="Color"] button[aria-label="#FF5A1F"]').click();
+  await browser.$('[aria-label="Picture"] button[aria-label="bot13"]').click();
   await browser.saveScreenshot(join(OUT, "new-bot.png"));
   await browser.$('[role="dialog"] button[type="submit"]').click();
   await browser.$(sidebarRow("Support Bot")).waitForDisplayed();

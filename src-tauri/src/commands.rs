@@ -6,7 +6,7 @@ use crate::agent::{self, Trigger};
 use crate::claude::{self, ClaudeStatus};
 use crate::events;
 use crate::models::{
-    AgentConfig, AppSettings, Avatar, Bot, BotIcon, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
+    AgentConfig, AppSettings, Avatar, Bot, BotImage, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
     SetupState,
 };
 use crate::setup;
@@ -31,17 +31,12 @@ pub fn create_bot(
     app: AppHandle,
     state: State<AppState>,
     name: String,
-    icon: BotIcon,
-    color: String,
+    image: BotImage,
 ) -> CmdResult<Bot> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("Bot name is required".into());
-    }
     let bot = Bot {
         id: uuid::Uuid::new_v4().to_string(),
-        name: name.to_string(),
-        avatar: Avatar::Icon { icon, color },
+        name: Bot::clean_name(&name)?,
+        avatar: Avatar::Image { image },
         pinned: false,
         updated_at: chrono::Utc::now().timestamp_millis(),
         preview: String::new(),
@@ -197,15 +192,6 @@ pub fn skip_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
     setup::skip(&app, &bot_id)
 }
 
-/// "Edit" in a bot's menu: the same as typing `/setup`, without the message.
-#[tauri::command]
-pub fn start_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {
-    if state.runs.running().contains(&bot_id) {
-        return Err(BUSY.into());
-    }
-    setup::command(&app, &bot_id)
-}
-
 /// "Exit setup" while changing a set-up bot with `/setup`.
 #[tauri::command]
 pub fn exit_setup(app: AppHandle, bot_id: String) -> CmdResult<()> {
@@ -283,6 +269,23 @@ pub fn update_bot_config(app: AppHandle, state: State<AppState>, bot_id: String,
             store.set_config(&bot_id, &config)?;
             // A resumed session keeps its first system prompt, so the new
             // config only takes effect in a new session.
+            store.set_session_id(&bot_id, None)?;
+        }
+        store.bot(&bot_id)?
+    };
+    events::bots_changed(&app);
+    Ok(bot)
+}
+
+/// "Edit" in a bot's menu.
+#[tauri::command]
+pub fn rename_bot(app: AppHandle, state: State<AppState>, bot_id: String, name: String) -> CmdResult<Bot> {
+    let name = Bot::clean_name(&name)?;
+    let bot = {
+        let store = state.store.lock().unwrap();
+        if store.bot(&bot_id)?.name != name {
+            store.set_name(&bot_id, &name)?;
+            // The system prompt names the bot; see `update_bot_config`.
             store.set_session_id(&bot_id, None)?;
         }
         store.bot(&bot_id)?

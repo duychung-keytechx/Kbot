@@ -198,6 +198,15 @@ export function SetupReviewCard({ botId, message }: Card<"setupReview">) {
 
   return (
     <CardFrame title={closed ? undefined : title} error={error} faded={message.discarded}>
+      {message.name && (
+        <div className="flex gap-2 text-[13px] leading-[19px]">
+          <p className="w-[60px] shrink-0 text-hint">Name</p>
+          <p className="selectable min-w-0 flex-1 break-words text-ink">
+            {message.name}
+            <Changed />
+          </p>
+        </div>
+      )}
       <Summary config={config} previous={previous} />
       {previous && (
         <Field label="Description" changed={changed((c) => c.description)}>
@@ -287,6 +296,7 @@ export function SetupCurrentCard({ config }: { config: AgentConfig }) {
       <div className="flex flex-col gap-1 border-t border-line pt-2.5 text-[13px] leading-[19px] text-ink">
         <p className="font-medium">To change anything, just tell me what you want, for example:</p>
         <ul className="list-disc pl-5 text-subtle">
+          <li>Rename yourself to Morning Brief</li>
           <li>Run at 7:00 on weekdays only, every 30 minutes, or on the 1st of each month</li>
           <li>Keep answers under 5 bullet points</li>
           <li>Turn off web search, and also read ~/Documents/reports</li>

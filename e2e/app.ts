@@ -73,11 +73,10 @@ export async function contextMenu(browser: Browser, name: string, item: string) 
 }
 
 /** Fills in and submits the "Create New Bot" dialog. */
-export async function createBot(browser: Browser, name: string, icon: string, color: string) {
+export async function createBot(browser: Browser, name: string, image = "bot01") {
   await browser.$('button[aria-label="New bot"]').click();
   await browser.$('input[placeholder="Name your bot"]').setValue(name);
-  await browser.$(`[aria-label="Icon"] button[aria-label="${icon}"]`).click();
-  await browser.$(`[aria-label="Color"] button[aria-label="${color}"]`).click();
+  await browser.$(`[aria-label="Picture"] button[aria-label="${image}"]`).click();
   await browser.$('[role="dialog"] button[type="submit"]').click();
   await browser.$(sidebarRow(name)).waitForDisplayed({ timeout: 5_000 });
 }

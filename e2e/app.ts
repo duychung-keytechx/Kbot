@@ -58,6 +58,20 @@ export type Browser = Awaited<ReturnType<typeof launch>>["browser"];
 
 export const sidebarRow = (name: string) => `//nav//button[.//p[normalize-space()="${name}"]]`;
 
+/** Right-clicks the bot in the sidebar and picks `item` from its context menu. */
+export async function contextMenu(browser: Browser, name: string, item: string) {
+  // The embedded WebDriver has no real right button, so fire the event the click would.
+  await browser.execute((xpath) => {
+    const row = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
+      .singleNodeValue as HTMLElement;
+    const r = row.getBoundingClientRect();
+    const at = { clientX: r.left + 40, clientY: r.top + 20 };
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, ...at }));
+  }, sidebarRow(name));
+  await browser.$(`//*[@role="menu"]//button[normalize-space()="${item}"]`).click();
+  await browser.$('[role="menu"]').waitForExist({ reverse: true });
+}
+
 /** Fills in and submits the "Create New Bot" dialog. */
 export async function createBot(browser: Browser, name: string, icon: string, color: string) {
   await browser.$('button[aria-label="New bot"]').click();

@@ -106,7 +106,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
           <Toggle checked={draft.webAccess} onChange={(webAccess) => set({ webAccess })}>
             Search the web
           </Toggle>
-          <p className="text-[12px] text-hint">Folders it can read (never change):</p>
+          <p className="text-[12px] text-hint">Folders it works with:</p>
           <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
         </Section>
 

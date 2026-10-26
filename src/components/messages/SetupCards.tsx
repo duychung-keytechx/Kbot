@@ -1,6 +1,7 @@
 // Onboarding cards (`setup*` messages, see src-tauri/src/setup.rs). Each one
 // is answered once with `answer_setup`; Rust then locks it by setting
-// `selected` / `submitted` / `confirmed` on the message.
+// `selected` / `submitted` / `confirmed` on the message. `/setup` on a set-up
+// bot shows `SetupCurrentCard`, then a review card for each change.
 
 import { type ReactNode, useState } from "react";
 import { backend, errorText } from "../../lib/api";
@@ -36,9 +37,22 @@ function useAnswer(botId: string, messageId: string) {
   return { busy, error, answer };
 }
 
-function CardFrame({ title, error, children }: { title?: string; error?: string; children: ReactNode }) {
+function CardFrame({
+  title,
+  error,
+  faded,
+  children,
+}: {
+  title?: string;
+  error?: string;
+  faded?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div data-testid="setup-card" className="flex w-[420px] max-w-full flex-col gap-2.5 rounded-2xl bg-bubble p-3">
+    <div
+      data-testid="setup-card"
+      className={`flex w-[420px] max-w-full flex-col gap-2.5 rounded-2xl bg-bubble p-3 ${faded ? "opacity-60" : ""}`}
+    >
       {title && <p className="text-[14px] leading-[21px] text-ink">{title}</p>}
       {children}
       {error && <p className="text-[12.5px] text-[#c4321c]">{error}</p>}
@@ -116,7 +130,7 @@ export function SetupFoldersCard({ botId, message }: Card<"setupFolders">) {
   const locked = message.submitted || busy;
   const shown = message.submitted ? message.folders : folders;
   return (
-    <CardFrame title="Any folders I should look into? I can read them, never change them." error={error}>
+    <CardFrame title="Any folders I should look into?" error={error}>
       {message.submitted && shown.length === 0 ? (
         <p className="text-[12.5px] text-hint">No folders</p>
       ) : (
@@ -137,18 +151,27 @@ export function SetupFoldersCard({ botId, message }: Card<"setupFolders">) {
 
 export function SetupReviewCard({ botId, message }: Card<"setupReview">) {
   const { busy, error, answer } = useAnswer(botId, message.id);
-  const { config } = message;
+  const { config, previous } = message;
   const [editing, setEditing] = useState(false);
   const [instructions, setInstructions] = useState(config.instructions);
   const [task, setTask] = useState(config.schedule?.task ?? "");
-  const locked = message.confirmed || busy;
+  const closed = message.confirmed || message.discarded;
+  const locked = closed || busy;
   const confirm = (c: { instructions: string; task: string }) =>
     void answer({ type: "review", instructions: c.instructions, task: config.schedule ? c.task : null });
+  // A `/setup` change marks what differs from the saved setup.
+  const changed = (f: (c: AgentConfig) => unknown) => !!previous && JSON.stringify(f(config)) !== JSON.stringify(f(previous));
+  const title = previous ? "Here's my updated setup. Save it?" : "Here's my setup. Look good?";
 
   return (
-    <CardFrame title={message.confirmed ? undefined : "Here's my setup. Look good?"} error={error}>
-      <Summary config={config} />
-      {editing && !message.confirmed ? (
+    <CardFrame title={closed ? undefined : title} error={error} faded={message.discarded}>
+      <Summary config={config} previous={previous} />
+      {previous && (
+        <Field label="Description" changed={changed((c) => c.description)}>
+          <p className="selectable text-[13.5px] leading-[20px] whitespace-pre-wrap text-ink">{config.description}</p>
+        </Field>
+      )}
+      {editing && !closed ? (
         <>
           <Field label="Instructions">
             <textarea rows={6} value={instructions} onChange={(e) => setInstructions(e.target.value)} className={textArea} />
@@ -161,18 +184,20 @@ export function SetupReviewCard({ botId, message }: Card<"setupReview">) {
         </>
       ) : (
         <>
-          <Field label="Instructions">
+          <Field label="Instructions" changed={changed((c) => c.instructions)}>
             <p className="selectable text-[13.5px] leading-[20px] whitespace-pre-wrap text-ink">{config.instructions}</p>
           </Field>
           {config.schedule && (
-            <Field label="Each run">
+            <Field label="Each run" changed={changed((c) => c.schedule?.task)}>
               <p className="selectable text-[13.5px] leading-[20px] whitespace-pre-wrap text-ink">{config.schedule.task}</p>
             </Field>
           )}
         </>
       )}
       {message.confirmed ? (
-        <p className="text-[12.5px] text-hint">Confirmed</p>
+        <p className="text-[12.5px] text-hint">{previous ? "Saved" : "Confirmed"}</p>
+      ) : message.discarded ? (
+        <p className="text-[12.5px] text-hint">Not saved</p>
       ) : editing ? (
         <div className="flex gap-2">
           <button
@@ -195,7 +220,7 @@ export function SetupReviewCard({ botId, message }: Card<"setupReview">) {
             onClick={() => confirm({ instructions: config.instructions, task: config.schedule?.task ?? "" })}
             className={primaryButton}
           >
-            Looks good
+            {previous ? "Save" : "Looks good"}
           </button>
           <button type="button" disabled={locked} onClick={() => setEditing(true)} className={secondaryButton}>
             Edit
@@ -206,29 +231,78 @@ export function SetupReviewCard({ botId, message }: Card<"setupReview">) {
   );
 }
 
-function Summary({ config }: { config: AgentConfig }) {
-  const rows: [string, string][] = [
-    ["Kind", config.schedule ? `Daily job, ${describeDays(config.schedule.days)} at ${config.schedule.time}` : "Chat"],
-    ["Web", config.webAccess ? "Can search the web" : "No web access"],
-    ["Folders", config.workspaceFolders.length ? config.workspaceFolders.join(", ") : "None"],
+/** `/setup` on a set-up bot: everything it runs with, and how to change it. */
+export function SetupCurrentCard({ config }: { config: AgentConfig }) {
+  return (
+    <CardFrame title="Here's my current setup.">
+      <Summary config={config} />
+      <Field label="Description">
+        <p className="selectable text-[13.5px] leading-[20px] whitespace-pre-wrap text-ink">
+          {config.description || "None"}
+        </p>
+      </Field>
+      <Field label="Instructions">
+        <p className="selectable text-[13.5px] leading-[20px] whitespace-pre-wrap text-ink">
+          {config.instructions || "None"}
+        </p>
+      </Field>
+      {config.schedule && (
+        <Field label="Each run">
+          <p className="selectable text-[13.5px] leading-[20px] whitespace-pre-wrap text-ink">{config.schedule.task}</p>
+        </Field>
+      )}
+      <div className="flex flex-col gap-1 border-t border-line pt-2.5 text-[13px] leading-[19px] text-ink">
+        <p className="font-medium">To change anything, just tell me what you want, for example:</p>
+        <ul className="list-disc pl-5 text-subtle">
+          <li>Run at 7:00 on weekdays only</li>
+          <li>Keep answers under 5 bullet points</li>
+          <li>Turn off web search, and also read ~/Documents/reports</li>
+        </ul>
+        <p className="text-hint">I'll show you the change before I save it.</p>
+      </div>
+    </CardFrame>
+  );
+}
+
+function Summary({ config, previous }: { config: AgentConfig; previous?: AgentConfig | null }) {
+  const describe = (c: AgentConfig): [string, string][] => [
+    ["Kind", c.schedule ? `Daily job, ${describeDays(c.schedule.days)} at ${c.schedule.time}` : "Chat"],
+    ["Notify", c.schedule ? (c.schedule.notify ? "When a run is done" : "Off") : ""],
+    ["Web", c.webAccess ? "Can search the web" : "No web access"],
+    ["Folders", c.workspaceFolders.length ? c.workspaceFolders.join(", ") : "None"],
   ];
+  const before = previous ? describe(previous) : null;
   return (
     <div className="flex flex-col gap-1">
-      {rows.map(([k, v]) => (
-        <div key={k} className="flex gap-2 text-[13px] leading-[19px]">
-          <p className="w-[60px] shrink-0 text-hint">{k}</p>
-          <p className="selectable min-w-0 flex-1 break-words text-ink">{v}</p>
-        </div>
-      ))}
+      {describe(config).map(([k, v], i) =>
+        v ? (
+          <div key={k} className="flex gap-2 text-[13px] leading-[19px]">
+            <p className="w-[60px] shrink-0 text-hint">{k}</p>
+            <p className="selectable min-w-0 flex-1 break-words text-ink">
+              {v}
+              {before && before[i][1] !== v && <Changed />}
+            </p>
+          </div>
+        ) : null,
+      )}
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, changed, children }: { label: string; changed?: boolean; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-[12px] font-medium text-hint">{label}</p>
+      <p className="text-[12px] font-medium text-hint">
+        {label}
+        {changed && <Changed />}
+      </p>
       {children}
     </div>
+  );
+}
+
+function Changed() {
+  return (
+    <span className="ml-1.5 rounded-full bg-white px-1.5 py-px text-[11px] font-medium text-ink-strong">changed</span>
   );
 }

@@ -53,6 +53,8 @@ export interface Bot {
   config: AgentConfig;
   /** Last daily job run, epoch ms. */
   lastRunAt: number | null;
+  /** A set-up bot is being changed with `/setup`. */
+  editing: boolean;
 }
 
 export type SetupState = "pending" | "done" | "skipped";
@@ -100,7 +102,43 @@ export type MessageBody =
   | { type: "setupChoice"; step: string; question: string; options: string[]; selected: string | null }
   | { type: "setupSchedule"; time: string; days: Weekday[]; notify: boolean; submitted: boolean }
   | { type: "setupFolders"; folders: string[]; submitted: boolean }
-  | { type: "setupReview"; config: AgentConfig; confirmed: boolean };
+  | {
+      type: "setupReview";
+      config: AgentConfig;
+      confirmed: boolean;
+      /** Set on a change made with `/setup`: the saved config it would replace. */
+      previous: AgentConfig | null;
+      /** Replaced by a newer change, or `/setup` was closed without saving. */
+      discarded: boolean;
+    }
+  | { type: "setupCurrent"; config: AgentConfig }
+  | {
+      /** Claude Code asks before using a tool, or asks the user something (`questions`). */
+      type: "permission";
+      requestId: string;
+      tool: string;
+      summary: string;
+      detail: string;
+      input: unknown;
+      questions: Question[];
+      status: PermissionStatus;
+      /** Picked option labels by question text (comma-separated if several). */
+      answers: Record<string, string>;
+    };
+
+export type Question = {
+  question: string;
+  header: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
+};
+
+export type PermissionStatus = "pending" | "approved" | "denied" | "answered" | "expired";
+
+export type PermissionAnswer =
+  | { type: "allow" }
+  | { type: "deny" }
+  | { type: "answers"; answers: Record<string, string> };
 
 export type Message = MessageBody & { id: string; createdAt: number };
 

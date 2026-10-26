@@ -51,6 +51,7 @@ fn bot_from_row(row: &Row) -> rusqlite::Result<Bot> {
         "icon" => Avatar::Icon { icon: from_text(row, "icon")?, color },
         _ => Avatar::Shape { shape: from_text(row, "shape")?, color },
     };
+    let setup_state: SetupState = from_text(row, "setup_state")?;
     Ok(Bot {
         id: row.get("id")?,
         name: row.get("name")?,
@@ -58,9 +59,10 @@ fn bot_from_row(row: &Row) -> rusqlite::Result<Bot> {
         pinned: row.get("pinned")?,
         updated_at: row.get("updated_at")?,
         preview: row.get("preview")?,
-        setup_state: from_text(row, "setup_state")?,
+        setup_state,
         config: from_json(row, "config")?,
         last_run_at: row.get("last_run_at")?,
+        editing: setup_state == SetupState::Done && row.get::<_, Option<String>>("setup_step")?.is_some(),
     })
 }
 
@@ -169,7 +171,9 @@ impl Store {
     pub fn push_message(&mut self, bot_id: &str, message: Message) -> Result<Message, String> {
         let tx = self.conn.transaction().map_err(err)?;
         let preview = match &message.body {
-            MessageBody::User { text } | MessageBody::Agent { text } => Some(text.as_str()),
+            MessageBody::User { text } | MessageBody::Agent { text } => Some(text.clone()),
+            MessageBody::Permission { questions, .. } if !questions.is_empty() => Some(questions[0].question.clone()),
+            MessageBody::Permission { tool, .. } => Some(format!("Wants to use {tool}. Approve?")),
             _ => None,
         };
         let updated = tx
@@ -314,6 +318,7 @@ mod tests {
             setup_state: SetupState::Pending,
             config: AgentConfig::default(),
             last_run_at: None,
+            editing: false,
         }
     }
 
@@ -462,6 +467,9 @@ mod tests {
         store.set_setup("a", SetupState::Done, None).unwrap();
         assert_eq!(store.bot("a").unwrap().setup_state, SetupState::Done);
         assert_eq!(store.setup_step("a").unwrap(), None);
+        assert!(!a.editing && !store.bot("a").unwrap().editing, "onboarding isn't editing");
+        store.set_setup("a", SetupState::Done, Some(&Step::Edit { draft: config.clone() })).unwrap();
+        assert!(store.bot("a").unwrap().editing);
         assert!(store.set_config("missing", &config).is_err());
     }
 }

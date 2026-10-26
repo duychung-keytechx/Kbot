@@ -13,14 +13,16 @@ import {
   type Message,
   type MessageBody,
   type MessageEvent,
+  type PermissionAnswer,
   type RunEvent,
 } from "./types";
 
-type Step = "kind" | "description" | "schedule" | "web" | "workspace" | "clarify" | "review";
+type Step = "kind" | "description" | "schedule" | "web" | "workspace" | "clarify" | "review" | "edit";
 
 const CHAT = "Chat with me";
 const DAILY = "Run a daily job";
 const BUSY = "Wait for the current reply to finish, or stop it.";
+const SETUP_COMMAND = "/setup";
 
 const bots: Bot[] = [];
 const conversations = new Map<string, Message[]>();
@@ -57,6 +59,8 @@ function push(botId: string, body: MessageBody): Message {
   const b = bot(botId);
   b.updatedAt = message.createdAt;
   if (body.type === "user" || body.type === "agent") b.preview = body.text;
+  if (body.type === "permission")
+    b.preview = body.questions[0]?.question ?? `Wants to use ${body.tool}. Approve?`;
   emit(botId, message);
   return message;
 }
@@ -65,6 +69,70 @@ function setRunning(botId: string, stop: (() => void) | null) {
   if (stop) running.set(botId, stop);
   else running.delete(botId);
   runListeners.forEach((cb) => cb({ botId, running: !!stop }));
+}
+
+/** Resumes a run waiting on a permission card, by message id. */
+const permissionWaits = new Map<string, (answer: PermissionAnswer) => void>();
+
+/** "ask me …" shows a question card, "… approval" a Bash approval card. */
+function askPermission(botId: string, question: boolean) {
+  const card = push(
+    botId,
+    question
+      ? {
+          type: "permission",
+          requestId: crypto.randomUUID(),
+          tool: "AskUserQuestion",
+          summary: "",
+          detail: "",
+          input: {},
+          questions: [
+            {
+              question: "Coffee or tea?",
+              header: "Drink",
+              options: [
+                { label: "Coffee", description: "Strong and hot" },
+                { label: "Tea", description: "Green, no sugar" },
+              ],
+              multiSelect: false,
+            },
+          ],
+          status: "pending",
+          answers: {},
+        }
+      : {
+          type: "permission",
+          requestId: crypto.randomUUID(),
+          tool: "Bash",
+          summary: "Delete the old build folder",
+          detail: "rm -rf ~/projects/site/build",
+          input: {},
+          questions: [],
+          status: "pending",
+          answers: {},
+        },
+  );
+  const expire = () => {
+    permissionWaits.delete(card.id);
+    if (card.type === "permission" && card.status === "pending") card.status = "expired";
+    emit(botId, card);
+  };
+  setRunning(botId, () => {
+    setRunning(botId, null);
+    expire();
+    push(botId, { type: "system", text: "Stopped" });
+  });
+  permissionWaits.set(card.id, (answer) => {
+    setRunning(botId, null);
+    reply(
+      botId,
+      answer.type === "answers"
+        ? `You picked ${Object.values(answer.answers).join(", ")}.`
+        : answer.type === "allow"
+          ? "Done, the build folder is gone."
+          : "OK, I left it alone.",
+    );
+  });
 }
 
 /** Streams `text` into one agent bubble, like `agent::Reply`. */
@@ -157,17 +225,55 @@ function enter(botId: string, step: Step) {
       });
       break;
     case "review":
-      push(botId, { type: "setupReview", config: structuredClone(config), confirmed: false });
+      push(botId, {
+        type: "setupReview",
+        config: structuredClone(config),
+        confirmed: false,
+        previous: null,
+        discarded: false,
+      });
+      break;
+    case "edit":
+      bot(botId).editing = true;
+      emitBots();
+      push(botId, { type: "setupCurrent", config: structuredClone(config) });
       break;
   }
 }
 
-function finish(botId: string) {
+function finish(botId: string, updated = false) {
   const b = bot(botId);
   steps.delete(botId);
   b.setupState = "done";
+  b.editing = false;
+  emitBots();
   const s = b.config.schedule;
-  push(botId, { type: "system", text: s ? `Setup complete · Next run: ${s.time}` : "Setup complete" });
+  const done = updated ? "Setup updated" : "Setup complete";
+  push(botId, { type: "system", text: s ? `${done} · Next run: ${s.time}` : done });
+}
+
+/** Marks an unsaved `/setup` change as not saved, like `setup::discard_changes`. */
+function discardChanges(botId: string) {
+  for (const m of conversations.get(botId) ?? []) {
+    if (m.type === "setupReview" && m.previous && !m.confirmed && !m.discarded) {
+      m.discarded = true;
+      emit(botId, m);
+    }
+  }
+}
+
+/** `/setup`, like `setup::command`: onboarding again, or show and change the setup. */
+function setupCommand(botId: string) {
+  const b = bot(botId);
+  discardChanges(botId);
+  if (b.setupState !== "done") {
+    b.setupState = "pending";
+    b.config = structuredClone(EMPTY_CONFIG);
+    emitBots();
+    enter(botId, "kind");
+  } else {
+    enter(botId, "edit");
+  }
 }
 
 function advance(botId: string, step: Step, input: string | Extract<Message, { type: `setup${string}` }>) {
@@ -176,6 +282,13 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
     if (step === "description") {
       config.description = input;
       enter(botId, config.schedule ? "schedule" : "web");
+    } else if (step === "edit") {
+      discardChanges(botId);
+      think(botId, () => {
+        const draft = structuredClone(config);
+        draft.instructions = `${draft.instructions}\n\n${input}`;
+        push(botId, { type: "setupReview", config: draft, confirmed: false, previous: structuredClone(config), discarded: false });
+      });
     } else if (step === "clarify") {
       think(botId, () => {
         config.instructions = `${config.description}\n\nFocus: ${input}`;
@@ -206,6 +319,11 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
       think(botId, () => enter(botId, "clarify"));
       break;
     case "setupReview":
+      if (input.previous) {
+        bot(botId).config = structuredClone(input.config);
+        finish(botId, true);
+        break;
+      }
       config.instructions = input.config.instructions;
       if (config.schedule && input.config.schedule) config.schedule.task = input.config.schedule.task;
       finish(botId);
@@ -227,6 +345,7 @@ export const mockBackend: Backend = {
       setupState: "pending",
       config: structuredClone(EMPTY_CONFIG),
       lastRunAt: null,
+      editing: false,
     };
     bots.splice(bots.filter((b) => b.pinned).length, 0, b);
     conversations.set(b.id, []);
@@ -238,8 +357,27 @@ export const mockBackend: Backend = {
     if (running.has(botId)) throw new Error(BUSY);
     const message = push(botId, { type: "user", text: text.trim() });
     const step = steps.get(botId);
-    if (bot(botId).setupState === "pending" && step) advance(botId, step, text.trim());
+    if (text.trim().toLowerCase() === SETUP_COMMAND) setupCommand(botId);
+    else if (step && (bot(botId).setupState === "pending" || step === "edit")) advance(botId, step, text.trim());
+    else if (/ask me|approval/i.test(text)) askPermission(botId, /ask me/i.test(text));
     else reply(botId, `On it: “${text.trim()}”. (Browser mock, run \`npm run tauri dev\` for Claude.)`);
+    return { ...message };
+  },
+  answerPermission: async (botId, messageId, answer) => {
+    const message = conversations.get(botId)?.find((m) => m.id === messageId);
+    if (!message || message.type !== "permission") throw new Error(`unknown message ${messageId}`);
+    if (message.status !== "pending") throw new Error("This was already answered.");
+    const waiting = permissionWaits.get(messageId);
+    if (!waiting) {
+      message.status = "expired";
+      emit(botId, message);
+      throw new Error("This request expired: the run already ended.");
+    }
+    permissionWaits.delete(messageId);
+    message.status = answer.type === "allow" ? "approved" : answer.type === "deny" ? "denied" : "answered";
+    if (answer.type === "answers") message.answers = answer.answers;
+    emit(botId, message);
+    waiting(answer);
     return { ...message };
   },
   setComputerControl: async (botId, messageId, control) => {
@@ -284,7 +422,7 @@ export const mockBackend: Backend = {
         Object.assign(message, { folders: answer.folders, submitted: true });
         break;
       case "setupReview":
-        if (answer.type !== "review" || message.confirmed) throw new Error("This question was already answered.");
+        if (answer.type !== "review" || message.confirmed || message.discarded) throw new Error("This question was already answered.");
         message.config.instructions = answer.instructions;
         if (message.config.schedule && answer.task !== null) message.config.schedule.task = answer.task;
         message.confirmed = true;
@@ -300,7 +438,20 @@ export const mockBackend: Backend = {
     running.get(botId)?.();
     steps.delete(botId);
     bot(botId).setupState = "skipped";
-    push(botId, { type: "system", text: "Setup skipped. You can set me up any time from Settings." });
+    push(botId, { type: "system", text: `Setup skipped. Type ${SETUP_COMMAND} any time to set me up.` });
+  },
+  startSetup: async (botId) => {
+    if (running.has(botId)) throw new Error(BUSY);
+    setupCommand(botId);
+  },
+  exitSetup: async (botId) => {
+    if (steps.get(botId) !== "edit") return;
+    running.get(botId)?.();
+    discardChanges(botId);
+    steps.delete(botId);
+    bot(botId).editing = false;
+    emitBots();
+    push(botId, { type: "system", text: "Setup closed. Nothing changed." });
   },
   redoSetup: async (botId) => {
     if (running.has(botId)) throw new Error(BUSY);
@@ -314,6 +465,10 @@ export const mockBackend: Backend = {
     bot(botId).preview = "";
     clearedListeners.forEach((cb) => cb(botId));
     if (bot(botId).setupState === "pending") enter(botId, "kind");
+    if (steps.get(botId) === "edit") {
+      steps.delete(botId);
+      bot(botId).editing = false;
+    }
     emitBots();
   },
   deleteBot: async (botId) => {

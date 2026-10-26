@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, test } from "node:test";
-import { type Browser, button, createBot, launch, send, sidebarRow, waitForText } from "./app.ts";
+import { type Browser, button, contextMenu, createBot, launch, send, sidebarRow, waitForText } from "./app.ts";
 
 let dataDir: string;
 
@@ -19,20 +19,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
-
-/** Right-clicks the bot in the sidebar and picks `item` from its context menu. */
-async function contextMenu(browser: Browser, name: string, item: string) {
-  // The embedded WebDriver has no real right button, so fire the event the click would.
-  await browser.execute((xpath) => {
-    const row = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
-      .singleNodeValue as HTMLElement;
-    const r = row.getBoundingClientRect();
-    const at = { clientX: r.left + 40, clientY: r.top + 20 };
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, ...at }));
-  }, sidebarRow(name));
-  await browser.$(`//*[@role="menu"]//button[normalize-space()="${item}"]`).click();
-  await browser.$('[role="menu"]').waitForExist({ reverse: true });
-}
 
 async function clearChat(browser: Browser, name: string) {
   await contextMenu(browser, name, "Clear History");

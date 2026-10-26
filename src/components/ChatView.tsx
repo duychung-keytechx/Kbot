@@ -5,7 +5,14 @@ import type { Bot, Message } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { Composer } from "./Composer";
 import { ComputerCard } from "./messages/ComputerCard";
-import { SetupChoiceCard, SetupFoldersCard, SetupReviewCard, SetupScheduleCard } from "./messages/SetupCards";
+import { PermissionCard } from "./messages/PermissionCard";
+import {
+  SetupChoiceCard,
+  SetupCurrentCard,
+  SetupFoldersCard,
+  SetupReviewCard,
+  SetupScheduleCard,
+} from "./messages/SetupCards";
 import { SettingsPanel } from "./SettingsPanel";
 
 export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
@@ -14,11 +21,14 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
   const onboarding = bot.setupState === "pending";
+  const inSetup = onboarding || bot.editing;
+  // The run is paused on a question or approval card, not working.
+  const waiting = messages.some((m) => m.type === "permission" && m.status === "pending");
 
   // A new bot greets the user and starts asking how to set it up.
   useEffect(() => {
-    if (onboarding) backend.ensureSetup(bot.id).catch((e) => setError(errorText(e)));
-  }, [bot.id, onboarding]);
+    if (inSetup) backend.ensureSetup(bot.id).catch((e) => setError(errorText(e)));
+  }, [bot.id, inSetup]);
 
   useEffect(() => {
     setSettingsOpen(false);
@@ -63,19 +73,21 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
           ) : (
             messages.map((m) => <MessageItem key={m.id} botId={bot.id} message={m} />)
           )}
-          {running && <Typing />}
+          {running && !waiting && <Typing />}
         </div>
 
-        {(onboarding || error) && (
+        {(inSetup || error) && (
           <div className="flex items-center gap-3 px-6">
             {error && <p className="min-w-0 flex-1 text-[12.5px] text-[#c4321c]">{error}</p>}
-            {onboarding && (
+            {inSetup && (
               <button
                 type="button"
-                onClick={() => backend.skipSetup(bot.id).catch((e) => setError(errorText(e)))}
+                onClick={() =>
+                  (onboarding ? backend.skipSetup(bot.id) : backend.exitSetup(bot.id)).catch((e) => setError(errorText(e)))
+                }
                 className="ml-auto shrink-0 text-[12.5px] text-subtle underline"
               >
-                Skip setup
+                {onboarding ? "Skip setup" : "Exit setup"}
               </button>
             )}
           </div>
@@ -136,6 +148,10 @@ function MessageItem({ botId, message }: { botId: string; message: Message }) {
       return <SetupFoldersCard botId={botId} message={message} />;
     case "setupReview":
       return <SetupReviewCard botId={botId} message={message} />;
+    case "setupCurrent":
+      return <SetupCurrentCard config={message.config} />;
+    case "permission":
+      return <PermissionCard botId={botId} message={message} />;
   }
 }
 

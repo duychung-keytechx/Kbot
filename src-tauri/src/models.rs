@@ -1,7 +1,10 @@
 //! Data types shared with the React UI. Everything is serialized camelCase;
 //! the TypeScript mirror lives in `src/lib/types.ts`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// The 15 robot icons offered in the "Create New Bot" dialog
 /// (glyphs in `src/components/avatars/botIcons.ts`).
@@ -72,6 +75,9 @@ pub struct Bot {
     pub config: AgentConfig,
     /// Unix epoch milliseconds of the last daily job run.
     pub last_run_at: Option<i64>,
+    /// A set-up bot is being changed with `/setup` (see `setup::Step::Edit`).
+    #[serde(default)]
+    pub editing: bool,
 }
 
 /// Whether the onboarding chat has configured this bot yet.
@@ -171,8 +177,75 @@ pub enum MessageBody {
     SetupSchedule { time: String, days: Vec<Weekday>, notify: bool, submitted: bool },
     /// Onboarding: folders the agent may read.
     SetupFolders { folders: Vec<String>, submitted: bool },
-    /// Onboarding: the final config for the user to confirm or edit.
-    SetupReview { config: AgentConfig, confirmed: bool },
+    /// Onboarding: the final config for the user to confirm or edit. With
+    /// `previous`, a change made with `/setup`, shown against the saved config.
+    SetupReview {
+        config: AgentConfig,
+        confirmed: bool,
+        #[serde(default)]
+        previous: Option<AgentConfig>,
+        /// Replaced by a newer change, or `/setup` was closed without saving.
+        #[serde(default)]
+        discarded: bool,
+    },
+    /// `/setup` on a set-up bot: its current config and how to change it.
+    SetupCurrent { config: AgentConfig },
+    /// Claude Code asks before using a tool, or asks the user something with
+    /// `AskUserQuestion` (`questions`). Answered with `answer_permission`.
+    Permission {
+        request_id: String,
+        tool: String,
+        /// What the tool is for, e.g. a Bash command's description.
+        summary: String,
+        /// The command, file or URL, or the whole input as JSON.
+        detail: String,
+        /// The tool input, sent back as is when approved.
+        input: Value,
+        #[serde(default)]
+        questions: Vec<Question>,
+        status: PermissionStatus,
+        /// Picked option labels by question (comma-separated if several).
+        #[serde(default)]
+        answers: BTreeMap<String, String>,
+    },
+}
+
+/// One question of an `AskUserQuestion` call, as Claude Code sends it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Question {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionStatus {
+    Pending,
+    Approved,
+    Denied,
+    Answered,
+    /// The run ended (finished, stopped or the app quit) before an answer.
+    Expired,
+}
+
+/// Answer to a `Permission` card, sent with `answer_permission`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PermissionAnswer {
+    Allow,
+    Deny,
+    /// `AskUserQuestion`: picked option labels by question.
+    Answers { answers: BTreeMap<String, String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,16 +6,19 @@ import { formatListTime } from "../lib/format";
 import type { Bot } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { ClearIcon, ClockIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
+import { ClearIcon, ClockIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon } from "./Icons";
 import { WindowControls } from "./WindowControls";
 
 export function Sidebar({
   bots,
+  running,
   selectedId,
   onSelect,
   onNewBot,
 }: {
   bots: Bot[];
+  /** Bots with a reply or job in progress; their "Edit" is disabled. */
+  running: Set<string>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onNewBot: () => void;
@@ -55,14 +58,20 @@ export function Sidebar({
 
       <nav className="-mr-2 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pr-2">
         {visible.map((bot) => (
-          <BotRow key={bot.id} bot={bot} active={bot.id === selectedId} onClick={() => onSelect(bot.id)} />
+          <BotRow
+            key={bot.id}
+            bot={bot}
+            active={bot.id === selectedId}
+            busy={running.has(bot.id)}
+            onClick={() => onSelect(bot.id)}
+          />
         ))}
       </nav>
     </aside>
   );
 }
 
-function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: () => void }) {
+function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; busy: boolean; onClick: () => void }) {
   // Right-click opens the context menu at the pointer.
   const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
   const [confirm, setConfirm] = useState<"clear" | "delete">();
@@ -92,7 +101,14 @@ function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: 
             <div className="flex-1" />
             <p className="shrink-0 text-[12px] text-muted">{formatListTime(bot.updatedAt)}</p>
           </div>
-          <p className="truncate text-[12.5px] text-subtle">{bot.preview || "No messages yet"}</p>
+          <div className="flex min-w-0 items-center gap-1.5">
+            {busy && (
+              <span data-testid="bot-working" title="Working" className="flex shrink-0">
+                <SpinnerIcon className="animate-[spin_2.4s_linear_infinite]" />
+              </span>
+            )}
+            <p className="truncate text-[12.5px] text-subtle">{bot.preview || (busy ? "Working…" : "No messages yet")}</p>
+          </div>
         </div>
       </button>
       {menuAt && (
@@ -101,6 +117,16 @@ function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: 
           label={`${bot.name} options`}
           onClose={() => setMenuAt(undefined)}
           items={[
+            {
+              label: "Edit",
+              icon: <EditIcon />,
+              disabled: busy,
+              // Opens the chat, where the setup is shown and changed as with `/setup`.
+              onSelect: () => {
+                onClick();
+                backend.startSetup(bot.id).catch((e) => console.error(e));
+              },
+            },
             { label: "Clear History", icon: <ClearIcon />, onSelect: () => setConfirm("clear") },
             { label: "Delete Chat", icon: <TrashIcon />, danger: true, onSelect: () => setConfirm("delete") },
           ]}
@@ -128,7 +154,7 @@ function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: 
   );
 }
 
-type MenuItem = { label: string; icon: ReactNode; danger?: boolean; onSelect: () => void };
+type MenuItem = { label: string; icon: ReactNode; danger?: boolean; disabled?: boolean; onSelect: () => void };
 
 /** A right-click menu at the pointer, kept inside the window. Closes on a click elsewhere, Escape or scroll. */
 function ContextMenu({
@@ -191,12 +217,13 @@ function ContextMenu({
           <button
             type="button"
             role="menuitem"
+            disabled={item.disabled}
             autoFocus={i === 0}
             onClick={() => {
               onClose();
               item.onSelect();
             }}
-            className={`flex items-center gap-2.5 rounded-[7px] px-2.5 py-[7px] text-left text-[13.5px] outline-none hover:bg-row-hover focus-visible:bg-row-hover ${
+            className={`flex items-center gap-2.5 rounded-[7px] px-2.5 py-[7px] text-left text-[13.5px] outline-none enabled:hover:bg-row-hover focus-visible:bg-row-hover disabled:opacity-40 ${
               item.danger ? "text-[#e5322d]" : "text-ink"
             }`}
           >

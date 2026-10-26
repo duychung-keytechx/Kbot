@@ -16,6 +16,7 @@ import type {
   Control,
   Message,
   MessageEvent,
+  PermissionAnswer,
   RunEvent,
   SetupAnswer,
 } from "./types";
@@ -26,6 +27,7 @@ export interface Backend {
   createBot(name: string, icon: BotIcon, color: string): Promise<Bot>;
   sendMessage(botId: string, text: string): Promise<Message>;
   setComputerControl(botId: string, messageId: string, control: Control): Promise<Message>;
+  answerPermission(botId: string, messageId: string, answer: PermissionAnswer): Promise<Message>;
   /** `refresh` skips the 10-minute cache ("Check again"). */
   claudeStatus(refresh: boolean): Promise<ClaudeStatus>;
   runningBots(): Promise<string[]>;
@@ -33,6 +35,10 @@ export interface Backend {
   ensureSetup(botId: string): Promise<void>;
   answerSetup(botId: string, messageId: string, answer: SetupAnswer): Promise<Message>;
   skipSetup(botId: string): Promise<void>;
+  /** Leaves `/setup` on a set-up bot without saving. */
+  /** "Edit" in a bot's menu; the same as sending `/setup`. */
+  startSetup(botId: string): Promise<void>;
+  exitSetup(botId: string): Promise<void>;
   redoSetup(botId: string): Promise<void>;
   /** Deletes the bot's chat history; a bot still being set up starts setup over. */
   clearChat(botId: string): Promise<void>;
@@ -64,12 +70,15 @@ const tauriBackend: Backend = {
   sendMessage: (botId, text) => invoke("send_message", { botId, text }),
   setComputerControl: (botId, messageId, control) =>
     invoke("set_computer_control", { botId, messageId, control }),
+  answerPermission: (botId, messageId, answer) => invoke("answer_permission", { botId, messageId, answer }),
   claudeStatus: (refresh) => invoke("claude_status", { refresh }),
   runningBots: () => invoke("running_bots"),
   cancelRun: (botId) => invoke("cancel_run", { botId }),
   ensureSetup: (botId) => invoke("ensure_setup", { botId }),
   answerSetup: (botId, messageId, answer) => invoke("answer_setup", { botId, messageId, answer }),
   skipSetup: (botId) => invoke("skip_setup", { botId }),
+  startSetup: (botId) => invoke("start_setup", { botId }),
+  exitSetup: (botId) => invoke("exit_setup", { botId }),
   redoSetup: (botId) => invoke("redo_setup", { botId }),
   clearChat: (botId) => invoke("clear_chat", { botId }),
   deleteBot: (botId) => invoke("delete_bot", { botId }),

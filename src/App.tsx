@@ -5,12 +5,13 @@ import { ConnectClaude } from "./components/ConnectClaude";
 import { NewBotModal } from "./components/NewBotModal";
 import { Sidebar } from "./components/Sidebar";
 import { backend } from "./lib/api";
-import { useBots, useClaudeStatus, useRunning } from "./lib/hooks";
+import { useBots, useClaudeStatus, useRunning, useWindowFocused } from "./lib/hooks";
 
 export default function App() {
   const bots = useBots();
   const running = useRunning();
   const claude = useClaudeStatus();
+  const focused = useWindowFocused();
   const [selectedId, setSelectedId] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -44,6 +45,13 @@ export default function App() {
   }, []);
 
   const selected = bots.find((b) => b.id === selectedId);
+  const chatShown = !!selected && (!claude.status || claude.status.state === "ready");
+
+  // The chat being looked at is read; its job results don't count as unread.
+  const viewing = focused && chatShown ? selected.id : null;
+  useEffect(() => {
+    backend.setViewing(viewing).catch((e) => console.error(e));
+  }, [viewing]);
 
   return (
     <div className="relative flex h-full overflow-hidden">

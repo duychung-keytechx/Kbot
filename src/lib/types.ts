@@ -55,6 +55,8 @@ export interface Bot {
   lastRunAt: number | null;
   /** A set-up bot is being changed with `/setup`. */
   editing: boolean;
+  /** A scheduled job posted a result or question the user hasn't seen. */
+  unread: boolean;
 }
 
 export type SetupState = "pending" | "done" | "skipped";

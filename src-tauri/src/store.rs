@@ -63,6 +63,7 @@ fn bot_from_row(row: &Row) -> rusqlite::Result<Bot> {
         config: from_json(row, "config")?,
         last_run_at: row.get("last_run_at")?,
         editing: setup_state == SetupState::Done && row.get::<_, Option<String>>("setup_step")?.is_some(),
+        unread: row.get("unread")?,
     })
 }
 
@@ -296,6 +297,14 @@ impl Store {
         self.update_bot(bot_id, "claude_session_id = ?2", &[&session_id])
     }
 
+    /// Returns whether the flag changed.
+    pub fn set_unread(&self, bot_id: &str, unread: bool) -> Result<bool, String> {
+        self.conn
+            .execute("UPDATE bots SET unread = ?2 WHERE id = ?1 AND unread != ?2", params![bot_id, unread])
+            .map(|n| n > 0)
+            .map_err(err)
+    }
+
     pub fn set_last_run_at(&self, bot_id: &str, ms: i64) -> Result<(), String> {
         self.update_bot(bot_id, "last_run_at = ?2", &[&ms])
     }
@@ -347,6 +356,7 @@ mod tests {
             config: AgentConfig::default(),
             last_run_at: None,
             editing: false,
+            unread: false,
         }
     }
 
@@ -450,6 +460,18 @@ mod tests {
         let mut ids: Vec<_> = store.scheduled_bots().into_iter().map(|b| b.id).collect();
         ids.sort();
         assert_eq!(ids, ["job", "skipped"]);
+    }
+
+    #[test]
+    fn unread_reports_changes() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("a", 1)).unwrap();
+        assert!(!store.bot("a").unwrap().unread);
+        assert!(store.set_unread("a", true).unwrap());
+        assert!(!store.set_unread("a", true).unwrap(), "already unread");
+        assert!(store.bot("a").unwrap().unread);
+        assert!(store.set_unread("a", false).unwrap());
+        assert!(!store.set_unread("missing", true).unwrap());
     }
 
     #[test]

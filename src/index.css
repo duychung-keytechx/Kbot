@@ -24,6 +24,9 @@
   --color-hint: #8a8a88;
   --color-icon: #6b6b6b;
 
+  /* sidebar dot for a job result the user hasn't seen */
+  --color-unread: #1a73f0;
+
   /* fields & buttons */
   --color-field-line: #d9d9d7;
   --color-composer-line: #dcdcda;

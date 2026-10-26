@@ -22,9 +22,17 @@ name, style and put to work, right from your desktop.
   hand control back to you whenever you want it.
 - **Built around you.** Spin up as many agents as you need, one per job, each
   with its own name, look and conversation history.
-- **Private by default.** Kbot is a native desktop app. Your agents and
-  conversations live in a local database on your machine, not in someone
-  else's cloud.
+- **Your data stays on your machine.** Kbot is a native desktop app. Your
+  agents and conversations are stored in a local database on your computer and
+  are never stored in the cloud.
+
+## The story
+
+Kbot grew out of the **GrokBot** idea, and one belief shaped it from day one:
+**your data belongs on your machine.** A personal agent gets to know your work,
+your contacts and your habits, and that is exactly the kind of data that should
+not sit on someone else's servers. So Kbot keeps everything local. No account,
+no sync, no cloud copy of your agents or your conversations.
 
 > **Status: early.** The UI, local storage and agent runtime are in place; the
 > agent itself is still a stub (`src-tauri/src/agent.rs`) that echoes your

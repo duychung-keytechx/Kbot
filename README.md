@@ -36,6 +36,11 @@ using your own Claude subscription. Built with [Tauri 2](https://tauri.app)
   run a daily job. It asks for a description, a schedule, whether it may search
   the web and which folders it may read, asks Claude a few clarifying questions,
   then shows the instructions it wrote for itself for you to confirm or edit.
+- **`/setup`.** Type it in the chat to see the agent's current setup, then say
+  what to change in your own words ("run at 7:00 on weekdays", "turn off web
+  search"). Claude updates the setup and shows it to you before saving. On an
+  agent that isn't set up yet, `/setup` starts the setup. **Edit** in the
+  agent's right-click menu does the same.
 - **Daily jobs.** A job runs at its set time on the chosen days and posts the
   result in the chat (with a notification if you want one). Jobs only run while
   Kbot is open; a missed run is not caught up later.
@@ -44,8 +49,18 @@ using your own Claude subscription. Built with [Tauri 2](https://tauri.app)
   the setup.
 - **Clear or delete.** Right-click an agent in the sidebar to clear its chat
   history (it also forgets the conversation) or delete it.
-- **Read-only folders.** Agents can read the folders you give them but have no
-  tools to write files or run commands.
+- **Full access.** Agents run Claude Code with all its tools and
+  `--permission-mode bypassPermissions`: they can run shell commands and read,
+  create, change or delete files anywhere your user account can, without
+  asking. The folders you give an agent are where it works; they don't limit
+  it. Turning web access off removes WebSearch and WebFetch.
+- **Questions and approvals.** When Claude Code asks the user something, the
+  question shows up in the chat with its options as buttons. If it ever asks
+  before using a tool, you get Approve and Deny buttons. The run waits for your
+  answer; stopping it, or the run ending, expires the card. A daily job that
+  is waiting sends a notification if notifications are on.
+- **Working spinner.** A bot that is busy shows a spinner in the sidebar, next
+  to its latest message, or the question it's waiting on.
 
 ## Getting started
 

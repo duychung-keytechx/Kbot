@@ -5,7 +5,10 @@ use tauri::{AppHandle, State};
 use crate::agent::{self, Trigger};
 use crate::claude::{self, ClaudeStatus};
 use crate::events;
-use crate::models::{AgentConfig, Avatar, Bot, BotIcon, Control, Message, MessageBody, SetupAnswer, SetupState};
+use crate::models::{
+    AgentConfig, Avatar, Bot, BotIcon, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
+    SetupState,
+};
 use crate::setup;
 use crate::AppState;
 
@@ -45,6 +48,7 @@ pub fn create_bot(
         setup_state: SetupState::Pending,
         config: AgentConfig::default(),
         last_run_at: None,
+        editing: false,
     };
     state.store.lock().unwrap().insert_bot(bot.clone())?;
     events::bots_changed(&app);
@@ -63,9 +67,14 @@ pub fn send_message(
     if text.is_empty() {
         return Err("Message is empty".into());
     }
-    let onboarding = state.store.lock().unwrap().bot(&bot_id)?.setup_state == SetupState::Pending;
+    let bot = state.store.lock().unwrap().bot(&bot_id)?;
+    let setup_command = text.eq_ignore_ascii_case(setup::COMMAND);
+    if setup_command && state.runs.running().contains(&bot_id) {
+        return Err(BUSY.into());
+    }
+    let in_setup = bot.setup_state == SetupState::Pending || bot.editing;
     // Claim the bot before saving the message, so a refused send leaves no trace.
-    let ticket = match onboarding {
+    let ticket = match in_setup || setup_command {
         true => None,
         false => Some(state.runs.start(&app, &bot_id).ok_or(BUSY)?),
     };
@@ -77,6 +86,7 @@ pub fn send_message(
     events::message(&app, &bot_id, message.clone());
     match ticket {
         Some(ticket) => agent::spawn(app, ticket, Trigger::UserMessage(text)),
+        None if setup_command => setup::command(&app, &bot_id)?,
         None => setup::answer_text(&app, &bot_id, text)?,
     }
     Ok(message)
@@ -105,6 +115,50 @@ pub fn set_computer_control(
         agent::spawn(app, ticket, Trigger::ComputerHandback);
     }
     Ok(message)
+}
+
+/// Answers a `Permission` card: lets the waiting Claude Code use the tool,
+/// refuses it, or gives it the picked options of an `AskUserQuestion`.
+#[tauri::command]
+pub fn answer_permission(
+    app: AppHandle,
+    state: State<AppState>,
+    bot_id: String,
+    message_id: String,
+    answer: PermissionAnswer,
+) -> CmdResult<Message> {
+    let mut store = state.store.lock().unwrap();
+    let message = store.messages(&bot_id).into_iter().find(|m| m.id == message_id).ok_or("Message not found.")?;
+    let MessageBody::Permission { request_id, input, status: PermissionStatus::Pending, .. } = message.body else {
+        return Err("This was already answered.".into());
+    };
+    let (decision, status, picked) = match answer {
+        PermissionAnswer::Allow => (Ok(input), PermissionStatus::Approved, None),
+        PermissionAnswer::Deny => (Err("The user denied this.".to_string()), PermissionStatus::Denied, None),
+        PermissionAnswer::Answers { answers } => {
+            let mut input = input;
+            if let Some(fields) = input.as_object_mut() {
+                fields.insert("answers".into(), serde_json::json!(answers));
+            }
+            (Ok(input), PermissionStatus::Answered, Some(answers))
+        }
+    };
+    // The run that asked is gone (stopped, or the app restarted).
+    let sent = state.runs.send(&bot_id, claude::permission_reply(&request_id, decision));
+    let message = store.update_message(&bot_id, &message_id, |m| {
+        if let MessageBody::Permission { status: s, answers, .. } = &mut m.body {
+            *s = if sent { status } else { PermissionStatus::Expired };
+            if let (true, Some(picked)) = (sent, picked) {
+                *answers = picked;
+            }
+        }
+    })?;
+    drop(store);
+    events::message_only(&app, &bot_id, message.clone());
+    match sent {
+        true => Ok(message),
+        false => Err("This request expired: the run already ended.".into()),
+    }
 }
 
 /// Whether Claude Code is installed and signed in; `refresh` skips the cache ("Check again").
@@ -142,6 +196,21 @@ pub fn skip_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
     setup::skip(&app, &bot_id)
 }
 
+/// "Edit" in a bot's menu: the same as typing `/setup`, without the message.
+#[tauri::command]
+pub fn start_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {
+    if state.runs.running().contains(&bot_id) {
+        return Err(BUSY.into());
+    }
+    setup::command(&app, &bot_id)
+}
+
+/// "Exit setup" while changing a set-up bot with `/setup`.
+#[tauri::command]
+pub fn exit_setup(app: AppHandle, bot_id: String) -> CmdResult<()> {
+    setup::exit_edit(&app, &bot_id)
+}
+
 #[tauri::command]
 pub fn redo_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {
     if state.runs.running().contains(&bot_id) {
@@ -165,7 +234,8 @@ pub fn delete_bot(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
 }
 
 /// "Clear History" in the sidebar menu. A bot still being set up starts
-/// its setup over, since the setup cards were part of the history.
+/// its setup over, since the setup cards were part of the history; a
+/// `/setup` change in progress is dropped.
 #[tauri::command]
 pub fn clear_chat(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdResult<()> {
     if state.runs.running().contains(&bot_id) {
@@ -174,7 +244,11 @@ pub fn clear_chat(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
     let pending = {
         let mut store = state.store.lock().unwrap();
         store.clear_messages(&bot_id)?;
-        store.bot(&bot_id)?.setup_state == SetupState::Pending
+        let bot = store.bot(&bot_id)?;
+        if bot.editing {
+            store.set_setup(&bot_id, SetupState::Done, None)?;
+        }
+        bot.setup_state == SetupState::Pending
     };
     events::cleared(&app, &bot_id);
     if pending {

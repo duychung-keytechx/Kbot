@@ -86,6 +86,19 @@ export const StopIcon = ({ color = "#FFFFFF", className }: IconProps) => (
   <span className={`block size-[10px] shrink-0 rounded-[2px] ${className ?? ""}`} style={{ background: color }} />
 );
 
+/** Sidebar context menu: "Edit" (14px pencil). */
+export const EditIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+  <Stroke
+    w={14}
+    h={14}
+    d="M9.5 1.5L12.5 4.5M10.6 0.9C11.13 0.37 11.98 0.37 12.5 0.9L13.1 1.5C13.63 2.02 13.63 2.87 13.1 3.4L4.5 12L0.5 13.5L2 9.5L10.6 0.9Z"
+    color={color}
+    width={1.2}
+    round
+    className={className}
+  />
+);
+
 /** Sidebar context menu: "Clear History" (14px circled ×). */
 export const ClearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
   <Stroke
@@ -113,6 +126,17 @@ export const TrashIcon = ({ color = "#E5322D", className }: IconProps) => (
 );
 
 /** Sidebar: the bot has a daily job (11px). */
+/** Claude-style asterisk, spun while a bot is working. */
+export const SpinnerIcon = ({ className }: { className?: string }) => (
+  <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden className={className}>
+    <g stroke="var(--color-control-dot)" strokeWidth="1.6" strokeLinecap="round">
+      {[0, 30, 60, 90, 120, 150].map((deg) => (
+        <line key={deg} x1="6" y1="1" x2="6" y2="11" transform={`rotate(${deg} 6 6)`} />
+      ))}
+    </g>
+  </svg>
+);
+
 export const ClockIcon = ({ color = "#8F8F8C", className }: IconProps) => (
   <Stroke
     w={11}

@@ -12,21 +12,28 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Notify;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::events;
 use crate::AppState;
 
-/// `--permission-mode` for agent runs. In "auto" mode Claude Code approves
-/// tool calls itself; the tool set is still limited by `--tools`, so agents
-/// can only read and search, never write or run commands. Note that "auto"
-/// also lets `Read` reach files outside `--add-dir`; "dontAsk" would confine
-/// reads to the workspace folders.
-pub const PERMISSION_MODE: &str = "auto";
+/// `--permission-mode` for agent runs: every tool call runs without asking,
+/// including shell commands and file changes anywhere on the computer.
+pub const PERMISSION_MODE: &str = "bypassPermissions";
+
+/// The Claude Code tools a run gets.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Tools {
+    /// No tools: onboarding helpers that only answer in JSON.
+    None,
+    /// Claude Code's default set, minus these.
+    AllExcept(Vec<&'static str>),
+}
 
 /// Variables that would make the CLI bill an API key or a cloud provider
 /// instead of the user's subscription. Removed from every child process.
@@ -208,7 +215,7 @@ pub struct RunSpec {
     pub prompt: String,
     pub system_prompt: String,
     pub session: Session,
-    pub tools: Vec<&'static str>,
+    pub tools: Tools,
     pub add_dirs: Vec<String>,
     pub model: Option<String>,
     pub json_schema: Option<Value>,
@@ -225,6 +232,12 @@ impl RunSpec {
             "stream-json",
             "--verbose",
             "--include-partial-messages",
+            // The prompt and answers to permission requests go to stdin as
+            // JSON lines; Claude Code asks for permission on stdout.
+            "--input-format",
+            "stream-json",
+            "--permission-prompt-tool",
+            "stdio",
             // No user/project settings, CLAUDE.md, hooks or MCP servers.
             "--setting-sources",
             "",
@@ -241,10 +254,14 @@ impl RunSpec {
             Session::Resume(id) => args.extend(["--resume".into(), id.clone()]),
             Session::Ephemeral => args.push("--no-session-persistence".into()),
         }
-        args.extend(["--tools".into(), self.tools.join(" ")]);
-        let web: Vec<_> = self.tools.iter().filter(|t| t.starts_with("Web")).copied().collect();
-        if !web.is_empty() {
-            args.extend(["--allowedTools".into(), web.join(" ")]);
+        match &self.tools {
+            Tools::None => args.extend(["--tools".into(), String::new()]),
+            Tools::AllExcept(except) => {
+                args.extend(["--tools".into(), "default".into()]);
+                if !except.is_empty() {
+                    args.extend(["--disallowedTools".into(), except.join(" ")]);
+                }
+            }
         }
         for dir in &self.add_dirs {
             args.extend(["--add-dir".into(), dir.clone()]);
@@ -269,6 +286,9 @@ pub enum Event {
     /// A finished text block (also sent without `--include-partial-messages`).
     Text(String),
     ToolUse { name: String, input: Value },
+    /// Claude Code wants an OK before running a tool (or an answer, for
+    /// `AskUserQuestion`); reply with `permission_reply`.
+    PermissionRequest { request_id: String, tool: String, input: Value },
     /// The subscription's usage limit was hit. Unix seconds.
     RateLimited { resets_at: Option<i64> },
     Result { is_error: bool, text: Option<String>, errors: Vec<String>, structured: Option<Value> },
@@ -310,6 +330,13 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 })
                 .collect()
         }
+        "control_request" if str_at(&v, "/request/subtype").as_deref() == Some("can_use_tool") => {
+            vec![Event::PermissionRequest {
+                request_id: str_at(&v, "/request_id").unwrap_or_default(),
+                tool: str_at(&v, "/request/tool_name").unwrap_or_default(),
+                input: v.pointer("/request/input").cloned().unwrap_or(Value::Null),
+            }]
+        }
         "rate_limit_event" => {
             let status = str_at(&v, "/rate_limit_info/status").unwrap_or_default();
             if status == "rejected" {
@@ -333,6 +360,20 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     }
 }
 
+/// The stdin line answering a `PermissionRequest`: `Ok(input)` runs the
+/// tool with that input, `Err(reason)` refuses it.
+pub fn permission_reply(request_id: &str, decision: Result<Value, String>) -> String {
+    let response = match decision {
+        Ok(input) => json!({"behavior": "allow", "updatedInput": input}),
+        Err(message) => json!({"behavior": "deny", "message": message}),
+    };
+    let reply = json!({
+        "type": "control_response",
+        "response": {"subtype": "success", "request_id": request_id, "response": response},
+    });
+    format!("{reply}\n")
+}
+
 /// How a run ended.
 #[derive(Debug)]
 pub enum Exit {
@@ -344,11 +385,13 @@ pub enum Exit {
 
 /// Runs `claude` with `spec`, calling `on_event` for every parsed event.
 /// Returning `false` from `on_event` kills the process. Notifying `cancel`
-/// kills it too.
+/// kills it too. Lines from `input` are written to its stdin until the
+/// result arrives.
 pub async fn run(
     bin: &Path,
     spec: &RunSpec,
     cancel: Arc<Notify>,
+    mut input: Option<&mut UnboundedReceiver<String>>,
     mut on_event: impl FnMut(Event) -> bool,
 ) -> Result<Exit, String> {
     std::fs::create_dir_all(&spec.cwd).map_err(|e| format!("can't create {}: {e}", spec.cwd.display()))?;
@@ -356,9 +399,11 @@ pub async fn run(
     cmd.args(spec.args()).current_dir(&spec.cwd).stdin(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("can't start Claude Code: {e}"))?;
 
-    let mut stdin = child.stdin.take().expect("piped stdin");
-    stdin.write_all(spec.prompt.as_bytes()).await.map_err(|e| format!("can't send the prompt: {e}"))?;
-    drop(stdin);
+    let mut stdin = Some(child.stdin.take().expect("piped stdin"));
+    let prompt = json!({"type": "user", "message": {"role": "user", "content": spec.prompt}});
+    if let Some(stdin) = &mut stdin {
+        stdin.write_all(format!("{prompt}\n").as_bytes()).await.map_err(|e| format!("can't send the prompt: {e}"))?;
+    }
 
     let mut stderr = child.stderr.take().expect("piped stderr");
     let stderr = tokio::spawn(async move {
@@ -371,7 +416,12 @@ pub async fn run(
         tokio::select! {
             line = lines.next_line() => match line {
                 Ok(Some(line)) => {
-                    if !parse_line(&line).into_iter().all(&mut on_event) {
+                    let events = parse_line(&line);
+                    // Claude Code waits for more input until stdin closes.
+                    if events.iter().any(|e| matches!(e, Event::Result { .. })) {
+                        stdin = None;
+                    }
+                    if !events.into_iter().all(&mut on_event) {
                         let _ = child.kill().await;
                         return Ok(Exit::Stopped);
                     }
@@ -382,6 +432,13 @@ pub async fn run(
                     break;
                 }
             },
+            Some(line) = next_input(&mut input), if stdin.is_some() => {
+                if let Some(stdin) = &mut stdin
+                    && let Err(e) = stdin.write_all(line.as_bytes()).await
+                {
+                    eprintln!("writing to claude failed: {e}");
+                }
+            }
             _ = cancel.notified() => {
                 let _ = child.kill().await;
                 return Ok(Exit::Stopped);
@@ -391,6 +448,13 @@ pub async fn run(
     let status = child.wait().await.map_err(|e| e.to_string())?;
     let stderr = stderr.await.unwrap_or_default();
     Ok(Exit::Finished { success: status.success(), stderr })
+}
+
+async fn next_input(input: &mut Option<&mut UnboundedReceiver<String>>) -> Option<String> {
+    match input {
+        Some(input) => input.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// One-off structured call (`--json-schema`) with no tools and no saved
@@ -408,7 +472,7 @@ pub async fn ask_json(
         prompt,
         system_prompt,
         session: Session::Ephemeral,
-        tools: Vec::new(),
+        tools: Tools::None,
         add_dirs: Vec::new(),
         model,
         json_schema: Some(schema),
@@ -416,7 +480,7 @@ pub async fn ask_json(
     };
     let mut output = None;
     let mut error = None;
-    let exit = run(bin, &spec, cancel, |event| {
+    let exit = run(bin, &spec, cancel, None, |event| {
         match event {
             Event::Init { api_key_source, .. } if api_key_source != "none" => {
                 error = Some(not_subscription_error(&api_key_source));
@@ -516,6 +580,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_permission_requests_and_builds_replies() {
+        // Captured from Claude Code 2.1.310 (`--permission-prompt-tool stdio`).
+        let bash = r#"{"type":"control_request","request_id":"a842","request":{"subtype":"can_use_tool",
+            "tool_name":"Bash","display_name":"Bash","input":{"command":"touch probe.txt && ls -l",
+            "description":"Create probe.txt and list directory details"},
+            "description":"Create probe.txt and list directory details","permission_suggestions":[]}}"#;
+        let input = serde_json::json!({"command": "touch probe.txt && ls -l", "description": "Create probe.txt and list directory details"});
+        assert_eq!(
+            parse_line(bash),
+            [Event::PermissionRequest { request_id: "a842".into(), tool: "Bash".into(), input: input.clone() }]
+        );
+        let other = r#"{"type":"control_request","request_id":"x","request":{"subtype":"hook_callback"}}"#;
+        assert!(parse_line(other).is_empty());
+
+        let allow: Value = serde_json::from_str(&permission_reply("a842", Ok(input.clone()))).unwrap();
+        assert_eq!(
+            allow,
+            serde_json::json!({"type": "control_response", "response": {"subtype": "success", "request_id": "a842",
+                "response": {"behavior": "allow", "updatedInput": input}}})
+        );
+        let deny = permission_reply("a842", Err("No".into()));
+        assert!(deny.ends_with('\n') && deny.contains(r#""behavior":"deny","message":"No""#));
+    }
+
+    #[test]
     fn parses_limits_errors_and_unknown_lines() {
         let limited = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792990200}}"#;
         assert_eq!(parse_line(limited), [Event::RateLimited { resets_at: Some(1792990200) }]);
@@ -544,7 +633,7 @@ mod tests {
             prompt: "hi".into(),
             system_prompt: "You are Bot.".into(),
             session: Session::Resume("s1".into()),
-            tools: vec!["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+            tools: Tools::AllExcept(vec!["WebSearch", "WebFetch"]),
             add_dirs: vec!["/a".into(), "/b".into()],
             model: Some("sonnet".into()),
             json_schema: None,
@@ -552,19 +641,23 @@ mod tests {
         };
         let args = spec.args().join("|");
         assert!(args.contains("|--setting-sources||--strict-mcp-config|"));
-        assert!(args.contains("|--permission-mode|auto|"));
+        assert!(args.contains("|--permission-mode|bypassPermissions|"));
+        assert!(args.contains("|--input-format|stream-json|--permission-prompt-tool|stdio|"));
         assert!(args.contains("|--resume|s1|"));
-        assert!(args.contains("|--tools|Read Glob Grep WebSearch WebFetch|--allowedTools|WebSearch WebFetch|"));
+        assert!(args.contains("|--tools|default|--disallowedTools|WebSearch WebFetch|"));
         assert!(args.contains("|--add-dir|/a|--add-dir|/b|--model|sonnet"));
         assert!(!args.contains("hi"), "prompt goes to stdin");
 
-        spec.tools.clear();
+        spec.tools = Tools::AllExcept(Vec::new());
+        assert!(spec.args().join("|").contains("|--tools|default|"));
+        assert!(!spec.args().contains(&"--disallowedTools".to_string()));
+
+        spec.tools = Tools::None;
         spec.add_dirs.clear();
         spec.session = Session::Ephemeral;
         let args = spec.args();
         let tools = args.iter().position(|a| a == "--tools").unwrap();
         assert_eq!(args[tools + 1], "");
         assert!(args.contains(&"--no-session-persistence".to_string()));
-        assert!(!args.contains(&"--allowedTools".to_string()));
     }
 }

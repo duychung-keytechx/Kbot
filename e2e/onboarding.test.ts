@@ -85,14 +85,16 @@ test("a new bot is set up in the chat, then replies through Claude Code", async 
   assert.equal(runs.length, 3, "clarifying questions, instructions, one chat reply");
   for (const args of runs) {
     const at = (flag: string) => args[args.indexOf(flag) + 1];
-    assert.equal(at("--permission-mode"), "auto");
+    assert.equal(at("--permission-mode"), "bypassPermissions");
     assert.equal(at("--setting-sources"), "");
     assert.ok(args.includes("--strict-mcp-config"));
   }
   const chat = runs[2];
-  assert.equal(chat[chat.indexOf("--tools") + 1], "WebSearch WebFetch");
+  assert.equal(chat[chat.indexOf("--tools") + 1], "default", "all tools");
+  assert.ok(!chat.includes("--disallowedTools"), "web access is on");
   assert.ok(chat.includes("--session-id"));
   assert.ok(runs[0].includes("--no-session-persistence") && runs[0].includes("--json-schema"));
+  assert.equal(runs[0][runs[0].indexOf("--tools") + 1], "", "onboarding helpers get no tools");
 });
 
 test("Connect Claude is shown until Claude Code is signed in", async () => {

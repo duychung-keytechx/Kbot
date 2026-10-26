@@ -35,7 +35,7 @@ export default function App() {
 
   return (
     <div className="relative flex h-full overflow-hidden">
-      <Sidebar bots={bots} selectedId={selectedId} onSelect={setSelectedId} onNewBot={() => setCreating(true)} />
+      <Sidebar bots={bots} running={running} selectedId={selectedId} onSelect={setSelectedId} onNewBot={() => setCreating(true)} />
       {claude.status && claude.status.state !== "ready" ? (
         <ConnectClaude status={claude.status} checking={claude.checking} onCheck={claude.check} />
       ) : selected ? (

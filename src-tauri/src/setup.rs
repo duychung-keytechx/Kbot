@@ -5,9 +5,16 @@
 //! clarifying questions about the description and to turn it into
 //! instructions. The current step is saved in `bots.setup_step`, so a setup
 //! interrupted by quitting the app resumes where it left off.
+//!
+//! Typing `/setup` starts over a bot that isn't set up yet. A set-up bot
+//! instead shows its current setup and takes changes in plain words: Claude
+//! applies them to the config and the user saves the result. The bot stays
+//! `done` meanwhile, with `Step::Edit` in `setup_step`.
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 
 use crate::agent::{self, post};
@@ -21,6 +28,8 @@ pub const CHAT: &str = "Chat with me";
 pub const DAILY: &str = "Run a daily job";
 pub const YES: &str = "Yes";
 pub const NO: &str = "No";
+/// Typed in the chat to set a bot up, or to change its setup.
+pub const COMMAND: &str = "/setup";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "step", rename_all = "camelCase")]
@@ -35,6 +44,9 @@ pub enum Step {
     /// Asking Claude's clarifying questions one by one.
     Clarify { questions: Vec<String>, answers: Vec<String> },
     Review,
+    /// `/setup` on a set-up bot: waiting for a change request, or for the
+    /// user to save `draft`, the config with the changes so far.
+    Edit { draft: AgentConfig },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +54,18 @@ pub enum Step {
 pub enum Generate {
     Questions,
     Review { clarifications: Vec<(String, String)> },
+    /// Apply the user's `request` to `draft`.
+    Edit { request: String, draft: AgentConfig },
+}
+
+impl Step {
+    /// The bot's setup state while at this step: changing a set-up bot keeps it `done`.
+    fn state(&self) -> SetupState {
+        match self {
+            Step::Edit { .. } | Step::Generating { what: Generate::Edit { .. } } => SetupState::Done,
+            _ => SetupState::Pending,
+        }
+    }
 }
 
 /// What the user gave for the current step.
@@ -115,6 +139,13 @@ pub fn apply(step: &Step, input: Input, config: &mut AgentConfig) -> Result<Next
             }
             Next::Done
         }
+        (Step::Edit { draft }, Input::Text(request)) => {
+            Next::Generate(Generate::Edit { request, draft: draft.clone() })
+        }
+        (Step::Edit { draft }, Input::Card(A::Review { instructions, task })) => {
+            *config = draft.clone();
+            return apply(&Step::Review, Input::Card(A::Review { instructions, task }), config);
+        }
         (Step::Generating { .. }, Input::Text(_)) => return Err("One moment, I'm still thinking.".into()),
         (_, Input::Text(_)) => return Err("Please answer with the card above, or skip setup.".into()),
         (_, Input::Card(_)) => return Err("This question was already answered.".into()),
@@ -144,7 +175,8 @@ fn card_matches(step: &Step, body: &MessageBody) -> bool {
         (Step::Web, MessageBody::SetupChoice { step, .. }) => step == "web",
         (Step::Schedule, MessageBody::SetupSchedule { .. }) => true,
         (Step::Workspace, MessageBody::SetupFolders { .. }) => true,
-        (Step::Review, MessageBody::SetupReview { .. }) => true,
+        (Step::Review, MessageBody::SetupReview { previous: None, .. }) => true,
+        (Step::Edit { .. }, MessageBody::SetupReview { previous: Some(_), .. }) => true,
         _ => false,
     }
 }
@@ -159,7 +191,7 @@ fn mark_answered(body: &mut MessageBody, answer: &SetupAnswer) {
         (MessageBody::SetupFolders { folders, submitted }, SetupAnswer::Folders { folders: f }) => {
             (*folders, *submitted) = (dedupe(f.clone()), true);
         }
-        (MessageBody::SetupReview { config, confirmed }, SetupAnswer::Review { instructions, task }) => {
+        (MessageBody::SetupReview { config, confirmed, .. }, SetupAnswer::Review { instructions, task }) => {
             config.instructions = instructions.trim().to_string();
             if let (Some(schedule), Some(task)) = (&mut config.schedule, task) {
                 schedule.task = task.trim().to_string();
@@ -178,7 +210,7 @@ fn store_op<T>(app: &AppHandle, f: impl FnOnce(&mut crate::store::Store) -> Resu
 /// that was waiting for Claude when the app quit. Idempotent.
 pub fn ensure(app: &AppHandle, bot_id: &str) -> Result<(), String> {
     let (bot, step) = store_op(app, |s| Ok((s.bot(bot_id)?, s.setup_step(bot_id)?)))?;
-    if bot.setup_state != SetupState::Pending {
+    if bot.setup_state != SetupState::Pending && !bot.editing {
         return Ok(());
     }
     match step {
@@ -196,6 +228,7 @@ pub fn ensure(app: &AppHandle, bot_id: &str) -> Result<(), String> {
 
 /// Restarts onboarding from the first step ("Redo setup").
 pub fn restart(app: &AppHandle, bot_id: &str) -> Result<(), String> {
+    discard_changes(app, bot_id)?;
     store_op(app, |s| s.set_setup(bot_id, SetupState::Pending, None))?;
     events::bots_changed(app);
     ensure(app, bot_id)
@@ -206,8 +239,55 @@ pub fn skip(app: &AppHandle, bot_id: &str) -> Result<(), String> {
         s.set_setup(bot_id, SetupState::Skipped, None)?;
         s.set_session_id(bot_id, None)
     })?;
-    post(app, bot_id, MessageBody::System { text: "Setup skipped. You can set me up any time from Settings.".into() });
+    post(app, bot_id, MessageBody::System { text: format!("Setup skipped. Type {COMMAND} any time to set me up.") });
     events::bots_changed(app);
+    Ok(())
+}
+
+/// `/setup` typed in the chat. A bot that isn't set up starts its setup
+/// over; a set-up bot shows its current setup and waits for changes.
+pub fn command(app: &AppHandle, bot_id: &str) -> Result<(), String> {
+    let bot = store_op(app, |s| s.bot(bot_id))?;
+    if bot.setup_state != SetupState::Done {
+        return restart(app, bot_id);
+    }
+    discard_changes(app, bot_id)?;
+    enter(app, &bot, Step::Edit { draft: bot.config.clone() })?;
+    post(app, bot_id, MessageBody::SetupCurrent { config: bot.config });
+    Ok(())
+}
+
+/// "Exit setup": leaves `/setup` without saving the change under review.
+pub fn exit_edit(app: &AppHandle, bot_id: &str) -> Result<(), String> {
+    let (bot, step) = store_op(app, |s| Ok((s.bot(bot_id)?, s.setup_step(bot_id)?)))?;
+    if !bot.editing {
+        return Ok(());
+    }
+    if matches!(step, Some(Step::Generating { .. })) {
+        app.state::<AppState>().runs.cancel(bot_id);
+    }
+    discard_changes(app, bot_id)?;
+    store_op(app, |s| s.set_setup(bot_id, SetupState::Done, None))?;
+    post(app, bot_id, MessageBody::System { text: "Setup closed. Nothing changed.".into() });
+    events::bots_changed(app);
+    Ok(())
+}
+
+/// Locks `/setup` changes that are still waiting to be saved.
+fn discard_changes(app: &AppHandle, bot_id: &str) -> Result<(), String> {
+    let open = store_op(app, |s| Ok(s.messages(bot_id)))?.into_iter().filter(|m| {
+        matches!(m.body, MessageBody::SetupReview { previous: Some(_), confirmed: false, discarded: false, .. })
+    });
+    for message in open {
+        let card = store_op(app, |s| {
+            s.update_message(bot_id, &message.id, |m| {
+                if let MessageBody::SetupReview { discarded, .. } = &mut m.body {
+                    *discarded = true;
+                }
+            })
+        })?;
+        events::message(app, bot_id, card);
+    }
     Ok(())
 }
 
@@ -225,7 +305,7 @@ pub fn answer_card(app: &AppHandle, bot_id: &str, message_id: &str, answer: Setu
     let answered = match &card.body {
         MessageBody::SetupChoice { selected, .. } => selected.is_some(),
         MessageBody::SetupSchedule { submitted, .. } | MessageBody::SetupFolders { submitted, .. } => *submitted,
-        MessageBody::SetupReview { confirmed, .. } => *confirmed,
+        MessageBody::SetupReview { confirmed, discarded, .. } => *confirmed || *discarded,
         _ => true,
     };
     if answered || !card_matches(&step, &card.body) {
@@ -255,20 +335,25 @@ fn advance(app: &AppHandle, bot_id: &str, input: Input) -> Result<(), String> {
     match next {
         Next::Ask(step) => enter(app, &bot, step),
         Next::Generate(what) => {
-            store_op(app, |s| s.set_setup(bot_id, SetupState::Pending, Some(&Step::Generating { what: what.clone() })))?;
+            if matches!(what, Generate::Edit { .. }) {
+                // A new request replaces the change being reviewed.
+                discard_changes(app, bot_id)?;
+            }
+            let generating = Step::Generating { what: what.clone() };
+            store_op(app, |s| s.set_setup(bot_id, generating.state(), Some(&generating)))?;
             let Some(ticket) = app.state::<AppState>().runs.start(app, bot_id) else {
                 return Err("I'm still busy, try again in a moment.".into());
             };
             generate(app.clone(), ticket, what);
             Ok(())
         }
-        Next::Done => finish(app, &bot),
+        Next::Done => finish(app, &bot, matches!(step, Step::Edit { .. })),
     }
 }
 
 /// Saves `step` and posts what the bot says or shows for it.
 fn enter(app: &AppHandle, bot: &Bot, step: Step) -> Result<(), String> {
-    store_op(app, |s| s.set_setup(&bot.id, SetupState::Pending, Some(&step)))?;
+    store_op(app, |s| s.set_setup(&bot.id, step.state(), Some(&step)))?;
     let config = &bot.config;
     let body = match &step {
         Step::Kind => MessageBody::SetupChoice {
@@ -306,21 +391,29 @@ fn enter(app: &AppHandle, bot: &Bot, step: Step) -> Result<(), String> {
                 },
             }
         }
-        Step::Review => MessageBody::SetupReview { config: config.clone(), confirmed: false },
+        Step::Review => {
+            MessageBody::SetupReview { config: config.clone(), confirmed: false, previous: None, discarded: false }
+        }
         Step::Generating { .. } => return Ok(()),
+        // Its cards are posted by `command` and `run_generate`.
+        Step::Edit { .. } => {
+            events::bots_changed(app);
+            return Ok(());
+        }
     };
     post(app, &bot.id, body);
     events::bots_changed(app);
     Ok(())
 }
 
-fn finish(app: &AppHandle, bot: &Bot) -> Result<(), String> {
+/// Saves the setup; `updated` = a change made with `/setup`.
+fn finish(app: &AppHandle, bot: &Bot, updated: bool) -> Result<(), String> {
     store_op(app, |s| {
         s.set_setup(&bot.id, SetupState::Done, None)?;
         // The session's system prompt is fixed when it starts; begin one with the new instructions.
         s.set_session_id(&bot.id, None)
     })?;
-    let mut text = "Setup complete".to_string();
+    let mut text = if updated { "Setup updated" } else { "Setup complete" }.to_string();
     if let Some(next) = bot.config.schedule.as_ref().and_then(|s| crate::scheduler::next_run(s, chrono::Local::now())) {
         text += &format!(" \u{b7} Next run: {}", crate::scheduler::describe_next_run(next, chrono::Local::now()));
     }
@@ -353,7 +446,8 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
             claude::ask_json(&bin, agent::workdir(&app, bot_id), system, prompt, schema, model, cancel).await
         }
     };
-    let next = match what {
+    // The step to go to, and what to post after entering it.
+    let (next, follow_up) = match what {
         Generate::Questions => {
             let result = ask(
                 QUESTIONS_PROMPT.into(),
@@ -375,11 +469,11 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
             };
             let questions: Vec<String> =
                 questions.into_iter().map(|q| q.trim().to_string()).filter(|q| !q.is_empty()).take(3).collect();
-            if questions.is_empty() {
-                Step::Review
-            } else {
-                Step::Clarify { questions, answers: Vec::new() }
-            }
+            let next = match questions.is_empty() {
+                true => Step::Review,
+                false => Step::Clarify { questions, answers: Vec::new() },
+            };
+            (next, Vec::new())
         }
         Generate::Review { clarifications } => {
             let mut prompt = summary;
@@ -417,16 +511,54 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
                 schedule.task = if task.is_empty() { config.description.clone() } else { task };
             }
             store_op(app, |s| s.set_config(bot_id, &config))?;
-            Step::Review
+            (Step::Review, Vec::new())
+        }
+        Generate::Edit { request, draft } => {
+            let result = ask(EDIT_PROMPT.into(), describe_edit(&bot, draft, request), edit_schema()).await;
+            match result {
+                Ok(v) => {
+                    let is_dir = |p: &str| Path::new(p).is_absolute() && Path::new(p).is_dir();
+                    let (config, note) = apply_edit(draft, &v, is_dir);
+                    let mut follow_up: Vec<MessageBody> = Vec::new();
+                    if !note.is_empty() {
+                        follow_up.push(MessageBody::Agent { text: note });
+                    }
+                    if config == bot.config {
+                        if follow_up.is_empty() {
+                            follow_up.push(MessageBody::Agent { text: "That's how I'm set up already.".into() });
+                        }
+                    } else {
+                        follow_up.push(MessageBody::SetupReview {
+                            config: config.clone(),
+                            confirmed: false,
+                            previous: Some(bot.config.clone()),
+                            discarded: false,
+                        });
+                    }
+                    (Step::Edit { draft: config }, follow_up)
+                }
+                Err(e) => {
+                    let text = match e.as_str() {
+                        "stopped" => "Stopped".to_string(),
+                        _ => format!("I couldn't change my setup: {e}"),
+                    };
+                    (Step::Edit { draft: draft.clone() }, vec![MessageBody::System { text }])
+                }
+            }
         }
     };
-    // Skipped or restarted while Claude was thinking: drop the result.
+    // Skipped, restarted or closed while Claude was thinking: drop the result.
+    let generating = Step::Generating { what: what.clone() };
     let current = store_op(app, |s| Ok((s.bot(bot_id)?.setup_state, s.setup_step(bot_id)?)))?;
-    if current != (SetupState::Pending, Some(Step::Generating { what: what.clone() })) {
+    if current != (generating.state(), Some(generating)) {
         return Ok(());
     }
     let bot = store_op(app, |s| s.bot(bot_id))?;
-    enter(app, &bot, next)
+    enter(app, &bot, next)?;
+    for body in follow_up {
+        post(app, bot_id, body);
+    }
+    Ok(())
 }
 
 fn describe_for_claude(bot: &Bot) -> String {
@@ -444,12 +576,111 @@ fn describe_for_claude(bot: &Bot) -> String {
     }
     s += &format!("Web access: {}\n", if config.web_access { "yes" } else { "no" });
     if config.workspace_folders.is_empty() {
-        s += "Folders it can read: none\n";
+        s += "Folders it works with: none\n";
     } else {
-        s += &format!("Folders it can read: {}\n", config.workspace_folders.join(", "));
+        s += &format!("Folders it works with: {}\n", config.workspace_folders.join(", "));
     }
     s += &format!("\nUser's description:\n{}", config.description);
     s
+}
+
+/// What Claude gets for a `/setup` change: the setup so far and the request.
+fn describe_edit(bot: &Bot, draft: &AgentConfig, request: &str) -> String {
+    // A chat agent shows the default schedule, used if it becomes a daily job.
+    let schedule = draft.schedule.clone().unwrap_or_default();
+    let current = json!({
+        "description": draft.description,
+        "instructions": draft.instructions,
+        "dailyJob": draft.schedule.is_some(),
+        "time": schedule.time,
+        "days": schedule.days,
+        "notify": schedule.notify,
+        "task": schedule.task,
+        "webAccess": draft.web_access,
+        "workspaceFolders": draft.workspace_folders,
+    });
+    let current = serde_json::to_string_pretty(&current).unwrap_or_default();
+    format!("Agent name: {}\n\nCurrent setup:\n{current}\n\nThe user's change request:\n{request}", bot.name)
+}
+
+fn edit_schema() -> Value {
+    let text = json!({"type": "string"});
+    let flag = json!({"type": "boolean"});
+    json!({
+        "type": "object",
+        "properties": {
+            "description": text,
+            "instructions": text,
+            "dailyJob": flag,
+            "time": text,
+            "days": {"type": "array", "items": {"type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}},
+            "notify": flag,
+            "task": text,
+            "webAccess": flag,
+            "workspaceFolders": {"type": "array", "items": {"type": "string"}},
+            "note": text
+        },
+        "required": ["description", "instructions", "dailyJob", "time", "days", "notify", "task", "webAccess", "workspaceFolders", "note"],
+        "additionalProperties": false
+    })
+}
+
+/// Builds the config Claude proposed for a `/setup` change from `draft`,
+/// keeping as it was anything missing or invalid. New folders must exist
+/// (`is_dir`). Returns the config and a note for the user.
+pub fn apply_edit(draft: &AgentConfig, v: &Value, is_dir: impl Fn(&str) -> bool) -> (AgentConfig, String) {
+    let text = |key: &str| v[key].as_str().map(str::trim).filter(|t| !t.is_empty()).map(String::from);
+    let mut config = draft.clone();
+    let mut notes: Vec<String> = text("note").into_iter().collect();
+    config.description = text("description").unwrap_or(config.description);
+    config.instructions = text("instructions").unwrap_or(config.instructions);
+    if let Some(web) = v["webAccess"].as_bool() {
+        config.web_access = web;
+    }
+    match v["dailyJob"].as_bool() {
+        Some(false) => config.schedule = None,
+        Some(true) => {
+            let schedule = config.schedule.get_or_insert_with(Schedule::default);
+            if let Some(time) = text("time").and_then(|t| chrono::NaiveTime::parse_from_str(&t, "%H:%M").ok()) {
+                schedule.time = time.format("%H:%M").to_string();
+            }
+            let days: Vec<Weekday> = serde_json::from_value(v["days"].clone()).unwrap_or_default();
+            if !days.is_empty() {
+                schedule.days = Weekday::ALL.into_iter().filter(|d| days.contains(d)).collect();
+            }
+            if let Some(notify) = v["notify"].as_bool() {
+                schedule.notify = notify;
+            }
+            if let Some(task) = text("task") {
+                schedule.task = task;
+            } else if schedule.task.is_empty() {
+                schedule.task = config.description.clone();
+            }
+        }
+        None => {}
+    }
+    if let Ok(folders) = serde_json::from_value::<Vec<String>>(v["workspaceFolders"].clone()) {
+        config.workspace_folders = Vec::new();
+        for folder in dedupe(folders) {
+            let path = expand_home(&folder);
+            if draft.workspace_folders.contains(&path) || is_dir(&path) {
+                config.workspace_folders.push(path);
+            } else {
+                notes.push(format!("I couldn't find the folder {folder}, so I left it out."));
+            }
+        }
+    }
+    (config, notes.join("\n\n"))
+}
+
+/// "~/notes" -> "/Users/me/notes".
+fn expand_home(path: &str) -> String {
+    match (path.strip_prefix('~'), std::env::home_dir()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            format!("{}{rest}", home.display())
+        }
+        _ => path.to_string(),
+    }
 }
 
 const QUESTIONS_PROMPT: &str = "You help a user set up a personal AI agent in Kbot, a desktop app. \
@@ -464,6 +695,20 @@ From the agent's setup and the user's answers, write:\n\
 output format and tone. Include every preference the user stated. Plain text, no Markdown headings.\n\
 - task: for a daily job, what to do on each run, in one short paragraph. For a chat agent, an empty string.\n\
 Write both in the language of the user's description.";
+
+const EDIT_PROMPT: &str = "You help a user change the setup of their personal AI agent in Kbot, a desktop app. \
+You get the agent's current setup as JSON and the user's change request. Return the whole setup with the request applied:\n\
+- Change only what the request asks for, plus whatever has to change with it. Copy everything else exactly.\n\
+- description: one or two sentences on what the agent does.\n\
+- instructions: the agent's instructions, addressed to the agent as \"you\". Concise and concrete, plain text, no Markdown headings. \
+Work a new preference into them rather than appending the request.\n\
+- dailyJob: whether the agent also runs a job by itself every day. time: local 24-hour \"HH:MM\". days: the days it runs. \
+notify: show a notification when a run finishes. task: what to do on each run, one short paragraph.\n\
+- webAccess: whether it can search the web.\n\
+- workspaceFolders: absolute paths of folders it works with. Add or remove only folders the user names.\n\
+- note: one or two short sentences telling the user what you changed. If the request is unclear, or asks for something \
+the setup doesn't cover (like the agent's name or icon), change nothing and say so.\n\
+Write the note, and any text you change, in the language of the user's request.";
 
 #[cfg(test)]
 mod tests {
@@ -532,7 +777,73 @@ mod tests {
     }
 
     #[test]
+    fn edit_takes_requests_then_saves_the_draft() {
+        let saved = AgentConfig { instructions: "Be brief.".into(), ..AgentConfig::default() };
+        let draft = AgentConfig { instructions: "Be brief. Use bullets.".into(), web_access: true, ..saved.clone() };
+        let step = Step::Edit { draft: draft.clone() };
+        assert_eq!(step.state(), SetupState::Done);
+        let mut config = saved.clone();
+        assert_eq!(
+            apply(&step, Input::Text("no web".into()), &mut config),
+            Ok(Next::Generate(Generate::Edit { request: "no web".into(), draft: draft.clone() }))
+        );
+        assert_eq!(config, saved, "nothing changes before saving");
+        let save = SetupAnswer::Review { instructions: " Use bullets. ".into(), task: None };
+        assert_eq!(apply(&step, Input::Card(save), &mut config), Ok(Next::Done));
+        assert_eq!(config, AgentConfig { instructions: "Use bullets.".into(), ..draft });
+        assert!(apply(&step, choice(YES), &mut config).is_err());
+    }
+
+    #[test]
+    fn apply_edit_keeps_what_claude_got_wrong() {
+        let draft = AgentConfig {
+            description: "AI news".into(),
+            instructions: "Brief me.".into(),
+            schedule: Some(Schedule { task: "Brief".into(), ..Schedule::default() }),
+            workspace_folders: vec!["/notes".into()],
+            ..AgentConfig::default()
+        };
+        let v = json!({
+            "description": "AI and chip news",
+            "instructions": "  ",
+            "dailyJob": true,
+            "time": "7:05",
+            "days": ["fri", "mon"],
+            "notify": false,
+            "task": "",
+            "webAccess": true,
+            "workspaceFolders": ["/notes", "/real", "/missing", "/real"],
+            "note": "Moved it to 07:05."
+        });
+        let (config, note) = apply_edit(&draft, &v, |p| p == "/real");
+        assert_eq!(config.description, "AI and chip news");
+        assert_eq!(config.instructions, "Brief me.", "empty text keeps the old one");
+        let schedule = config.schedule.unwrap();
+        assert_eq!((schedule.time.as_str(), schedule.notify, schedule.task.as_str()), ("07:05", false, "Brief"));
+        assert_eq!(schedule.days, [Weekday::Mon, Weekday::Fri]);
+        assert!(config.web_access);
+        assert_eq!(config.workspace_folders, ["/notes", "/real"]);
+        assert_eq!(note, "Moved it to 07:05.\n\nI couldn't find the folder /missing, so I left it out.");
+
+        let bad = json!({"dailyJob": true, "time": "noon", "days": ["someday"]});
+        let (config, note) = apply_edit(&draft, &bad, |_| false);
+        assert_eq!(config, draft, "invalid values are ignored");
+        assert_eq!(note, "");
+        let (config, _) = apply_edit(&draft, &json!({"dailyJob": false}), |_| false);
+        assert_eq!(config.schedule, None);
+        let chat = AgentConfig { description: "News".into(), ..AgentConfig::default() };
+        let (config, _) = apply_edit(&chat, &json!({"dailyJob": true}), |_| false);
+        assert_eq!(config.schedule.map(|s| s.task), Some("News".into()), "a new daily job gets a task");
+    }
+
+    #[test]
     fn step_round_trips_as_json() {
+        let edit = Step::Generating {
+            what: Generate::Edit { request: "shorter".into(), draft: AgentConfig::default() },
+        };
+        assert_eq!(serde_json::from_str::<Step>(&serde_json::to_string(&edit).unwrap()).unwrap(), edit);
+        assert_eq!(edit.state(), SetupState::Done);
+        assert_eq!(Step::Generating { what: Generate::Questions }.state(), SetupState::Pending);
         let step = Step::Generating {
             what: Generate::Review { clarifications: vec![("q".into(), "a".into())] },
         };

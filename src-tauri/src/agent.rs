@@ -10,9 +10,9 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::claude::{self, ClaudeStatus, Event, Exit, RunSpec, Session};
+use crate::claude::{self, ClaudeStatus, Event, Exit, RunSpec, Session, Tools};
 use crate::events;
-use crate::models::{AgentConfig, Bot, Message, MessageBody, Weekday};
+use crate::models::{AgentConfig, Bot, Message, MessageBody, PermissionStatus, Question, Weekday};
 use crate::runs::Ticket;
 use crate::AppState;
 
@@ -97,10 +97,13 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         json_schema: None,
         cwd: workdir(app, bot_id),
     };
+    let mut input = ticket.input.lock().await;
+    let job = matches!(trigger, Trigger::DailyJob { .. });
     loop {
-        let mut reply = Reply::new(app, bot_id);
-        let exit = claude::run(&bin, &spec, ticket.cancel.clone(), |e| reply.on_event(e)).await;
+        let mut reply = Reply::new(app, &bot, job);
+        let exit = claude::run(&bin, &spec, ticket.cancel.clone(), Some(&mut *input), |e| reply.on_event(e)).await;
         reply.close();
+        reply.expire_unanswered();
         let exit = exit?;
         // The saved session is gone (e.g. Claude Code's history was cleared): start over once.
         if reply.session_missing && matches!(spec.session, Session::Resume(_)) {
@@ -124,14 +127,16 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
             state.claude.invalidate();
             claude::status(app, true).await;
         }
-        let notify = bot.config.schedule.as_ref().is_some_and(|s| s.notify);
-        if matches!(trigger, Trigger::DailyJob { .. }) && notify && !reply.text.is_empty() {
-            let body: String = reply.text.chars().take(180).collect();
-            if let Err(e) = app.notification().builder().title(&bot.name).body(body).show() {
-                eprintln!("notification failed: {e}");
-            }
+        if reply.notify && !reply.text.is_empty() {
+            notify(app, &bot.name, reply.text.chars().take(180).collect());
         }
         return Ok(());
+    }
+}
+
+fn notify(app: &AppHandle, title: &str, body: String) {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        eprintln!("notification failed: {e}");
     }
 }
 
@@ -139,6 +144,11 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
 struct Reply<'a> {
     app: &'a AppHandle,
     bot_id: &'a str,
+    bot_name: &'a str,
+    /// A daily job that should notify the user (result, or waiting for an answer).
+    notify: bool,
+    /// Permission cards posted during this run.
+    asked: Vec<String>,
     /// The agent bubble text is streaming into.
     current: Option<Message>,
     /// `current` has deltas that aren't saved to the database yet.
@@ -153,10 +163,13 @@ struct Reply<'a> {
 }
 
 impl<'a> Reply<'a> {
-    fn new(app: &'a AppHandle, bot_id: &'a str) -> Self {
+    fn new(app: &'a AppHandle, bot: &'a Bot, job: bool) -> Self {
         Self {
             app,
-            bot_id,
+            bot_id: &bot.id,
+            bot_name: &bot.name,
+            notify: job && bot.config.schedule.as_ref().is_some_and(|s| s.notify),
+            asked: Vec::new(),
             current: None,
             dirty: false,
             last_emit: Instant::now(),
@@ -205,9 +218,24 @@ impl<'a> Reply<'a> {
                 self.text = text;
                 self.current = None;
             }
+            // Its question card follows as a permission request.
+            Event::ToolUse { name, .. } if name == "AskUserQuestion" => self.close(),
             Event::ToolUse { name, input } => {
                 self.close();
                 self.system(activity(&name, &input));
+            }
+            Event::PermissionRequest { request_id, tool, input } => {
+                self.close();
+                if self.notify {
+                    let body = match tool.as_str() {
+                        "AskUserQuestion" => "has a question for you.".to_string(),
+                        _ => format!("wants to use {tool}."),
+                    };
+                    notify(self.app, self.bot_name, format!("{} {body}", self.bot_name));
+                }
+                if let Some(message) = post(self.app, self.bot_id, permission_card(request_id, tool, input)) {
+                    self.asked.push(message.id);
+                }
             }
             Event::RateLimited { resets_at } => {
                 self.rate_limited = true;
@@ -254,6 +282,23 @@ impl<'a> Reply<'a> {
         self.dirty = false;
     }
 
+    /// Marks permission cards of this run that were never answered as expired.
+    fn expire_unanswered(&mut self) {
+        for id in self.asked.drain(..) {
+            let result = self.app.state::<AppState>().store.lock().unwrap().update_message(self.bot_id, &id, |m| {
+                if let MessageBody::Permission { status, .. } = &mut m.body
+                    && *status == PermissionStatus::Pending
+                {
+                    *status = PermissionStatus::Expired;
+                }
+            });
+            match result {
+                Ok(message) => events::message_only(self.app, self.bot_id, message),
+                Err(e) => eprintln!("expiring permission failed: {e}"),
+            }
+        }
+    }
+
     /// Ends the current bubble, saving any streamed text that wasn't saved yet.
     fn close(&mut self) {
         if self.dirty
@@ -266,15 +311,60 @@ impl<'a> Reply<'a> {
     }
 }
 
+/// The chat card for a tool Claude Code asks about (see `MessageBody::Permission`).
+fn permission_card(request_id: String, tool: String, input: Value) -> MessageBody {
+    let arg = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+    let detail = match tool.as_str() {
+        "Bash" => arg("command"),
+        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => arg("file_path"),
+        "WebFetch" => arg("url"),
+        "WebSearch" => arg("query"),
+        "AskUserQuestion" => String::new(),
+        _ => serde_json::to_string_pretty(&input).unwrap_or_default(),
+    };
+    let summary = match arg("description") {
+        d if !d.is_empty() => d,
+        _ => match tool.as_str() {
+            "Bash" => "Run a shell command".into(),
+            "Read" => "Read a file".into(),
+            "Write" => "Create or replace a file".into(),
+            "Edit" | "MultiEdit" | "NotebookEdit" => "Change a file".into(),
+            "WebFetch" => "Open a web page".into(),
+            "WebSearch" => "Search the web".into(),
+            _ => String::new(),
+        },
+    };
+    let questions = input
+        .get("questions")
+        .and_then(|q| serde_json::from_value::<Vec<Question>>(q.clone()).ok())
+        .unwrap_or_default();
+    MessageBody::Permission {
+        request_id,
+        tool,
+        summary,
+        detail,
+        input,
+        questions,
+        status: PermissionStatus::Pending,
+        answers: Default::default(),
+    }
+}
+
 /// One-line description of a tool call, shown in the chat.
 fn activity(tool: &str, input: &Value) -> String {
     let arg = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or_default();
+    let file = || {
+        let path = arg("file_path");
+        path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+    };
     match tool {
-        "Read" => {
-            let path = arg("file_path");
-            let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-            format!("Reading {name}\u{2026}")
-        }
+        "Read" => format!("Reading {}\u{2026}", file()),
+        "Write" => format!("Writing {}\u{2026}", file()),
+        "Edit" => format!("Editing {}\u{2026}", file()),
+        "Bash" => match arg("description") {
+            "" => format!("Running {}\u{2026}", arg("command").lines().next().unwrap_or_default()),
+            description => format!("{description}\u{2026}"),
+        },
         "Glob" => format!("Looking for files matching {}\u{2026}", arg("pattern")),
         "Grep" => format!("Searching files for \u{201c}{}\u{201d}\u{2026}", arg("pattern")),
         "WebSearch" => format!("Searching the web for \u{201c}{}\u{201d}\u{2026}", arg("query")),
@@ -287,16 +377,13 @@ fn activity(tool: &str, input: &Value) -> String {
     }
 }
 
-/// Tools the bot may use. Read-only by design: no Bash, Edit or Write.
-pub fn tools(config: &AgentConfig) -> Vec<&'static str> {
-    let mut tools = Vec::new();
-    if !config.workspace_folders.is_empty() {
-        tools.extend(["Read", "Glob", "Grep"]);
+/// Tools the bot may use: all of Claude Code's, run without asking (see
+/// `claude::PERMISSION_MODE`). Only web access can be turned off.
+pub fn tools(config: &AgentConfig) -> Tools {
+    match config.web_access {
+        true => Tools::AllExcept(Vec::new()),
+        false => Tools::AllExcept(vec!["WebSearch", "WebFetch"]),
     }
-    if config.web_access {
-        tools.extend(["WebSearch", "WebFetch"]);
-    }
-    tools
 }
 
 /// The bot's system prompt. Claude Code keeps a session's first system
@@ -324,10 +411,11 @@ pub fn system_prompt(bot: &Bot) -> String {
         );
     }
     s += "\n# Access\n\n";
-    if config.workspace_folders.is_empty() {
-        s += "You have no access to the user's files.\n";
-    } else {
-        s += "You can read (never change) these folders with the Read, Glob and Grep tools:\n";
+    s += "You can use all of your tools without asking: run shell commands, and read, create and change files anywhere on this computer. \
+          Your working directory is your own; save things you make there unless the user says where. \
+          Don't delete or overwrite the user's files unless they ask you to.\n";
+    if !config.workspace_folders.is_empty() {
+        s += "The user gave you these folders to work with:\n";
         for folder in &config.workspace_folders {
             s += &format!("- {folder}\n");
         }
@@ -335,7 +423,7 @@ pub fn system_prompt(bot: &Bot) -> String {
     if config.web_access {
         s += "You can search the web (WebSearch) and read pages (WebFetch). Cite the pages you used.\n";
     } else {
-        s += "You cannot access the web.\n";
+        s += "You cannot access the web. Don't try to reach it another way, such as with shell commands.\n";
     }
     s += "\n# Style\n\n\
           - Reply in the language the user writes in.\n\
@@ -400,18 +488,36 @@ mod tests {
             setup_state: SetupState::Done,
             config,
             last_run_at: None,
+            editing: false,
         }
+    }
+
+    #[test]
+    fn permission_cards_show_the_command_or_questions() {
+        let card = permission_card("r1".into(), "Bash".into(), serde_json::json!({"command": "rm -rf build"}));
+        let MessageBody::Permission { summary, detail, questions, status, .. } = card else { panic!() };
+        assert_eq!((summary.as_str(), detail.as_str()), ("Run a shell command", "rm -rf build"));
+        assert!(questions.is_empty());
+        assert_eq!(status, PermissionStatus::Pending);
+
+        let input = serde_json::json!({"questions": [{"question": "Coffee or tea?", "header": "Drink",
+            "options": [{"label": "Coffee", "description": "Hot"}, {"label": "Tea", "description": ""}], "multiSelect": false}]});
+        let MessageBody::Permission { detail, questions, .. } = permission_card("r2".into(), "AskUserQuestion".into(), input)
+        else {
+            panic!()
+        };
+        assert_eq!(detail, "");
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].question, "Coffee or tea?");
+        assert_eq!(questions[0].options[1].label, "Tea");
     }
 
     #[test]
     fn tools_follow_config() {
         let mut config = AgentConfig::default();
-        assert!(tools(&config).is_empty());
-        config.workspace_folders.push("/notes".into());
-        assert_eq!(tools(&config), ["Read", "Glob", "Grep"]);
+        assert_eq!(tools(&config), Tools::AllExcept(vec!["WebSearch", "WebFetch"]));
         config.web_access = true;
-        config.workspace_folders.clear();
-        assert_eq!(tools(&config), ["WebSearch", "WebFetch"]);
+        assert_eq!(tools(&config), Tools::AllExcept(Vec::new()));
     }
 
     #[test]
@@ -455,5 +561,9 @@ mod tests {
         assert_eq!(activity("Read", &read), "Reading todo.md\u{2026}");
         let fetch = serde_json::json!({"url": "https://news.ycombinator.com/item?id=1"});
         assert_eq!(activity("WebFetch", &fetch), "Opening news.ycombinator.com\u{2026}");
+        let ls = serde_json::json!({"command": "ls -l ~/notes\necho done"});
+        assert_eq!(activity("Bash", &ls), "Running ls -l ~/notes\u{2026}");
+        let ls = serde_json::json!({"command": "ls -l", "description": "List files with sizes"});
+        assert_eq!(activity("Bash", &ls), "List files with sizes\u{2026}");
     }
 }

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Kbot",
+        "width": 1198,
+        "height": 778,
+        "minWidth": 860,
+        "minHeight": 560,
+        "center": true,
+        "decorations": false
+      }
+    ]
+  }
+}

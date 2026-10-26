@@ -1,0 +1,36 @@
+[package]
+name = "kbot"
+version = "0.1.0"
+description = "Kbot desktop app"
+authors = ["Keytechx"]
+edition = "2024"
+
+[lib]
+# The `_lib` suffix avoids a lib/bin name clash on Windows (rust-lang/cargo#8519).
+name = "kbot_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time"] }
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
+tauri-plugin-wdio-webdriver = { version = "1.5.1", optional = true }
+
+# https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+[features]
+# Embedded WebDriver server for `npm run test:e2e`. Never enable in shipping builds.
+e2e = ["dep:tauri-plugin-wdio-webdriver"]

@@ -1,0 +1,102 @@
+@import "tailwindcss";
+/* Same variable Inter (wght + opsz axes) that Google Fonts serves the mocks */
+@import "@fontsource-variable/inter/opsz.css";
+
+/* Design tokens, taken 1:1 from design/Kbot.html and design/Kbot_newbotscreen.html */
+@theme {
+  --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+
+  /* surfaces */
+  --color-sidebar: #f7f7f6;
+  --color-sidebar-line: #e4e4e2;
+  --color-row-active: #eaeae8;
+  --color-row-hover: #efefed;
+  --color-main: #fbfbfa;
+  --color-line: #e8e8e6;
+  --color-bubble: #f0f0ee;
+
+  /* text */
+  --color-ink: #1f1f1f;
+  --color-ink-strong: #141414;
+  --color-muted: #8f8f8c;
+  --color-subtle: #6e6e6b;
+  --color-placeholder: #9a9a98;
+  --color-hint: #8a8a88;
+  --color-icon: #6b6b6b;
+
+  /* fields & buttons */
+  --color-field-line: #d9d9d7;
+  --color-composer-line: #dcdcda;
+  --color-button-line: #dadad8;
+
+  /* computer card "You're in control" pill */
+  --color-control-bg: #fbe6d3;
+  --color-control-dot: #d9731f;
+  --color-control-ink: #b5601a;
+
+  /* Create New Bot dialog */
+  --color-scrim: rgb(26 26 26 / 0.35);
+  --color-modal-line: #e6e6e4;
+  --color-divider: #ececea;
+  --color-cancel-line: #e2e2e0;
+  --color-disabled: #e6e6e4;
+  --color-disabled-ink: #a9a9a6;
+  --color-shape-selected: #d6d6d4;
+  --color-swatch-selected: #cfcfcd;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  /* The mock uses the browser default line-height; Tailwind's preflight sets 1.5. */
+  html {
+    line-height: normal;
+  }
+
+  body {
+    background: var(--color-main);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    /* Feel like an app, not a web page */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  input,
+  textarea,
+  .selectable {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  ::placeholder {
+    color: var(--color-placeholder);
+    opacity: 1;
+  }
+
+  :focus {
+    outline: none;
+  }
+  button:focus-visible {
+    outline: 2px solid rgb(20 20 20 / 0.25);
+    outline-offset: 1px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(0 0 0 / 0.14);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

@@ -5,7 +5,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBot, launch, sidebarRow } from "./app.ts";
+import { button, createBot, launch, send, sidebarRow, waitForText } from "./app.ts";
 
 const OUT = join(import.meta.dirname, "../docs/screenshots");
 mkdirSync(OUT, { recursive: true });
@@ -28,10 +28,15 @@ try {
   await browser.$('[role="dialog"] button[type="submit"]').click();
   await browser.$(sidebarRow("Support Bot")).waitForDisplayed();
 
+  // A new bot sets itself up in the chat.
   await browser.$(sidebarRow("Sales Assistant")).click();
-  await browser.$('input[placeholder="Message Sales Assistant"]').setValue("Find 10 new leads in fintech this week");
-  await browser.$('button[aria-label="Send"]').click();
-  await browser.$("//p[starts-with(text(), 'On it')]").waitForDisplayed({ timeout: 5_000 });
+  await waitForText(browser, "Hi, I'm Sales Assistant!");
+  await browser.$(button("Chat with me")).click();
+  await waitForText(browser, "Describe what I should do.");
+  await send(browser, "Sales Assistant", "Find new fintech leads each week and draft a short intro email for each one");
+  await waitForText(browser, "Should I be able to search the web?");
+  await browser.$(button("Yes")).click();
+  await waitForText(browser, "Any folders I should look into?");
   await browser.saveScreenshot(join(OUT, "chat.png"));
 } finally {
   await close();

@@ -1,40 +1,96 @@
-import { useLayoutEffect, useRef } from "react";
-import { backend } from "../lib/api";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { backend, errorText } from "../lib/api";
 import { useMessages } from "../lib/hooks";
 import type { Bot, Message } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { Composer } from "./Composer";
 import { ComputerCard } from "./messages/ComputerCard";
+import { SetupChoiceCard, SetupFoldersCard, SetupReviewCard, SetupScheduleCard } from "./messages/SetupCards";
+import { SettingsPanel } from "./SettingsPanel";
 
-export function ChatView({ bot }: { bot: Bot }) {
+export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   const messages = useMessages(bot.id);
   const scroller = useRef<HTMLDivElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [error, setError] = useState<string>();
+  const onboarding = bot.setupState === "pending";
+
+  // A new bot greets the user and starts asking how to set it up.
+  useEffect(() => {
+    if (onboarding) backend.ensureSetup(bot.id).catch((e) => setError(errorText(e)));
+  }, [bot.id, onboarding]);
+
+  useEffect(() => {
+    setSettingsOpen(false);
+    setError(undefined);
+  }, [bot.id]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, running]);
+
+  const send = async (text: string) => {
+    setError(undefined);
+    try {
+      await backend.sendMessage(bot.id, text);
+      return true;
+    } catch (e) {
+      setError(errorText(e));
+      return false;
+    }
+  };
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-main">
-      <header data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-main px-4">
-        <BotAvatar avatar={bot.avatar} size={18} />
-        <p data-tauri-drag-region className="truncate text-[13.5px] font-medium text-ink">
-          {bot.name}
-        </p>
-        <div data-tauri-drag-region className="flex-1 self-stretch" />
-      </header>
+    <div className="flex min-w-0 flex-1">
+      <main className="flex min-w-0 flex-1 flex-col bg-main">
+        <header data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-main px-4">
+          <button
+            type="button"
+            title="Settings"
+            onClick={() => setSettingsOpen((o) => !o)}
+            className="-ml-1.5 flex min-w-0 items-center gap-2 rounded-[8px] px-1.5 py-1 hover:bg-row-hover"
+          >
+            <BotAvatar avatar={bot.avatar} size={18} />
+            <p className="truncate text-[13.5px] font-medium text-ink">{bot.name}</p>
+          </button>
+          <div data-tauri-drag-region className="flex-1 self-stretch" />
+        </header>
 
-      <div ref={scroller} className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto px-6 pt-5 pb-4">
-        {messages.length === 0 ? (
-          <EmptyState bot={bot} />
-        ) : (
-          messages.map((m) => <MessageItem key={m.id} botId={bot.id} message={m} />)
+        <div ref={scroller} className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto px-6 pt-5 pb-4">
+          {messages.length === 0 && !running ? (
+            <EmptyState bot={bot} />
+          ) : (
+            messages.map((m) => <MessageItem key={m.id} botId={bot.id} message={m} />)
+          )}
+          {running && <Typing />}
+        </div>
+
+        {(onboarding || error) && (
+          <div className="flex items-center gap-3 px-6">
+            {error && <p className="min-w-0 flex-1 text-[12.5px] text-[#c4321c]">{error}</p>}
+            {onboarding && (
+              <button
+                type="button"
+                onClick={() => backend.skipSetup(bot.id).catch((e) => setError(errorText(e)))}
+                className="ml-auto shrink-0 text-[12.5px] text-subtle underline"
+              >
+                Skip setup
+              </button>
+            )}
+          </div>
         )}
-      </div>
 
-      <Composer key={bot.id} botName={bot.name} onSend={(text) => void backend.sendMessage(bot.id, text)} />
-    </main>
+        <Composer
+          key={bot.id}
+          botName={bot.name}
+          running={running}
+          onSend={send}
+          onStop={() => void backend.cancelRun(bot.id)}
+        />
+      </main>
+      {settingsOpen && <SettingsPanel bot={bot} running={running} onClose={() => setSettingsOpen(false)} />}
+    </div>
   );
 }
 
@@ -53,7 +109,7 @@ function MessageItem({ botId, message }: { botId: string; message: Message }) {
     case "system":
       return (
         <div className="flex justify-center self-stretch py-1.5">
-          <p className="text-[12.5px] text-hint">{message.text}</p>
+          <p className="selectable max-w-[530px] text-center text-[12.5px] text-hint">{message.text}</p>
         </div>
       );
     case "agent":
@@ -72,7 +128,30 @@ function MessageItem({ botId, message }: { botId: string; message: Message }) {
           onControl={(control) => void backend.setComputerControl(botId, message.id, control)}
         />
       );
+    case "setupChoice":
+      return <SetupChoiceCard botId={botId} message={message} />;
+    case "setupSchedule":
+      return <SetupScheduleCard botId={botId} message={message} />;
+    case "setupFolders":
+      return <SetupFoldersCard botId={botId} message={message} />;
+    case "setupReview":
+      return <SetupReviewCard botId={botId} message={message} />;
   }
+}
+
+/** Shown while the bot is busy (`kbot://run`). */
+function Typing() {
+  return (
+    <div data-testid="typing" aria-label="Working" className="flex gap-1 rounded-2xl bg-bubble px-3.5 py-[15px]">
+      {[0, 150, 300].map((delay) => (
+        <span
+          key={delay}
+          className="size-[6px] animate-bounce rounded-full bg-hint"
+          style={{ animationDelay: `${delay}ms`, animationDuration: "1s" }}
+        />
+      ))}
+    </div>
+  );
 }
 
 function EmptyState({ bot }: { bot: Bot }) {

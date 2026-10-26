@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { ChatView } from "./components/ChatView";
+import { ConnectClaude } from "./components/ConnectClaude";
 import { NewBotModal } from "./components/NewBotModal";
 import { Sidebar } from "./components/Sidebar";
-import { useBots } from "./lib/hooks";
+import { useBots, useClaudeStatus, useRunning } from "./lib/hooks";
 
 export default function App() {
   const bots = useBots();
+  const running = useRunning();
+  const claude = useClaudeStatus();
   const [selectedId, setSelectedId] = useState<string>();
   const [creating, setCreating] = useState(false);
 
@@ -32,8 +35,10 @@ export default function App() {
   return (
     <div className="relative flex h-full overflow-hidden">
       <Sidebar bots={bots} selectedId={selectedId} onSelect={setSelectedId} onNewBot={() => setCreating(true)} />
-      {selected ? (
-        <ChatView bot={selected} />
+      {claude.status && claude.status.state !== "ready" ? (
+        <ConnectClaude status={claude.status} checking={claude.checking} onCheck={claude.check} />
+      ) : selected ? (
+        <ChatView bot={selected} running={running.has(selected.id)} />
       ) : (
         <main data-tauri-drag-region className="flex flex-1 flex-col items-center justify-center gap-3 bg-main">
           {bots.length === 0 && (

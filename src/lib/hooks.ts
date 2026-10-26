@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "./api";
-import type { Bot, Message } from "./types";
+import type { Bot, ClaudeStatus, Message } from "./types";
 
 export function useBots(): Bot[] {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -16,7 +16,7 @@ export function useBots(): Bot[] {
   return bots;
 }
 
-/** Messages for one bot, kept live via `kbot://message` upserts. */
+/** Messages for one bot, kept live via `kbot://message` upserts and `kbot://cleared`. */
 export function useMessages(botId: string | undefined): Message[] {
   const [messages, setMessages] = useState<Message[]>([]);
   useEffect(() => {
@@ -34,10 +34,65 @@ export function useMessages(botId: string | undefined): Message[] {
         return next;
       });
     });
+    const offCleared = backend.onCleared((id) => id === botId && setMessages([]));
+    return () => {
+      alive = false;
+      off();
+      offCleared();
+    };
+  }, [botId]);
+  return messages;
+}
+
+/** Ids of bots with a reply, daily job or setup step in progress (`kbot://run`). */
+export function useRunning(): Set<string> {
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let alive = true;
+    const off = backend.onRun(({ botId, running }) =>
+      setRunning((prev) => {
+        const next = new Set(prev);
+        if (running) next.add(botId);
+        else next.delete(botId);
+        return next;
+      }),
+    );
+    backend.runningBots().then((ids) => alive && setRunning(new Set(ids)));
     return () => {
       alive = false;
       off();
     };
-  }, [botId]);
-  return messages;
+  }, []);
+  return running;
+}
+
+/**
+ * Claude Code's install/sign-in state; `undefined` until the first check.
+ * `check()` re-runs `claude auth status` ("Check again").
+ */
+export function useClaudeStatus(): { status: ClaudeStatus | undefined; checking: boolean; check: () => void } {
+  const [status, setStatus] = useState<ClaudeStatus>();
+  const [checking, setChecking] = useState(true);
+  const load = useCallback((refresh: boolean) => {
+    setChecking(true);
+    backend
+      .claudeStatus(refresh)
+      .then(setStatus)
+      .finally(() => setChecking(false));
+  }, []);
+  const ready = status?.state === "ready";
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
+  useEffect(() => {
+    load(false);
+    const off = backend.onClaudeStatus(setStatus);
+    // Signing in happens in Terminal; look again when the user comes back.
+    const onFocus = () => readyRef.current || load(true);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      off();
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [load]);
+  return { status, checking, check: () => load(true) };
 }

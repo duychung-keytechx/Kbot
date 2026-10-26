@@ -80,3 +80,30 @@ export const SendIcon = ({ color = "#FFFFFF", className }: IconProps) => (
 export const CloseIcon = ({ color = "#6B6B6B", className }: IconProps) => (
   <Stroke w={12} h={12} d="M0 0L12 12M12 0L0 12" color={color} width={1.5} round className={className} />
 );
+
+/** Composer "stop" while the bot is replying (10px filled square). */
+export const StopIcon = ({ color = "#FFFFFF", className }: IconProps) => (
+  <span className={`block size-[10px] shrink-0 rounded-[2px] ${className ?? ""}`} style={{ background: color }} />
+);
+
+/** Sidebar row menu: three horizontal dots (14×3). */
+export const MoreIcon = ({ color = "#6B6B6B", className }: IconProps) => (
+  <span className={`flex w-[14px] shrink-0 items-center justify-between ${className ?? ""}`} aria-hidden>
+    {[0, 1, 2].map((i) => (
+      <span key={i} className="block size-[3px] rounded-full" style={{ background: color }} />
+    ))}
+  </span>
+);
+
+/** Sidebar: the bot has a daily job (11px). */
+export const ClockIcon = ({ color = "#8F8F8C", className }: IconProps) => (
+  <Stroke
+    w={11}
+    h={11}
+    d="M5.5 2.5L5.5 5.5L7.5 6.75M5.5 0C8.538 0 11 2.462 11 5.5C11 8.538 8.538 11 5.5 11C2.462 11 0 8.538 0 5.5C0 2.462 2.462 0 5.5 0Z"
+    color={color}
+    width={1.1}
+    round
+    className={className}
+  />
+);

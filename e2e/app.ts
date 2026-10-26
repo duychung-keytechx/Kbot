@@ -13,10 +13,23 @@ const APP = join(
 );
 const PORT = 4455;
 
-/** Starts the app with its database in `dataDir` and opens a WebDriver session to its window. */
-export async function launch(dataDir: string) {
+/** Stands in for Claude Code; see the file for the env vars it reads. */
+export const FAKE_CLAUDE = join(import.meta.dirname, "fake-claude.ts");
+
+/**
+ * Starts the app with its database in `dataDir` and opens a WebDriver session
+ * to its window. Claude Code is replaced by `fake-claude.ts`; `env` adds or
+ * overrides variables (e.g. FAKE_CLAUDE_STATE).
+ */
+export async function launch(dataDir: string, env: Record<string, string> = {}) {
   const app: ChildProcess = spawn(APP, {
-    env: { ...process.env, KBOT_DATA_DIR: dataDir, TAURI_WEBDRIVER_PORT: String(PORT) },
+    env: {
+      ...process.env,
+      KBOT_DATA_DIR: dataDir,
+      TAURI_WEBDRIVER_PORT: String(PORT),
+      KBOT_CLAUDE_BIN: FAKE_CLAUDE,
+      ...env,
+    },
     stdio: "inherit",
   });
   const deadline = Date.now() + 30_000;
@@ -53,4 +66,18 @@ export async function createBot(browser: Browser, name: string, icon: string, co
   await browser.$(`[aria-label="Color"] button[aria-label="${color}"]`).click();
   await browser.$('[role="dialog"] button[type="submit"]').click();
   await browser.$(sidebarRow(name)).waitForDisplayed({ timeout: 5_000 });
+}
+
+/** The last enabled button with this exact label (older setup cards keep theirs, disabled). */
+export const button = (label: string) => `(//button[normalize-space()="${label}" and not(@disabled)])[last()]`;
+
+/** Types into the composer and sends. */
+export async function send(browser: Browser, botName: string, text: string) {
+  await browser.$(`input[placeholder="Message ${botName}"]`).setValue(text);
+  await browser.$('button[aria-label="Send"]').click();
+}
+
+/** Waits for an element containing `text` anywhere in the window. */
+export async function waitForText(browser: Browser, text: string, timeout = 10_000) {
+  await browser.$(`//*[contains(text(), ${JSON.stringify(text)})]`).waitForDisplayed({ timeout });
 }

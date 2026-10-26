@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The 15 robot icons offered in the "Create New Bot" dialog
-/// (glyphs in `src/components/avatars/botIcons.ts`).
+/// The 15 robot glyphs (in `src/components/avatars/botIcons.ts`). No longer
+/// offered when creating a bot, but still rendered for bots that have one.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum BotIcon {
@@ -26,6 +26,33 @@ pub enum BotIcon {
     Bubble,
     Tall,
     Chatty,
+}
+
+/// The 20 bot pictures offered in the "Create New Bot" dialog
+/// (`src/assets/bots/<id>.png`, from Flaticon; see THIRD_PARTY_NOTICES.md).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BotImage {
+    Bot01,
+    Bot02,
+    Bot03,
+    Bot04,
+    Bot05,
+    Bot06,
+    Bot07,
+    Bot08,
+    Bot09,
+    Bot10,
+    Bot11,
+    Bot12,
+    Bot13,
+    Bot14,
+    Bot15,
+    Bot16,
+    Bot17,
+    Bot18,
+    Bot19,
+    Bot20,
 }
 
 /// The mock's 15 bot shapes. No longer offered when creating a bot, but
@@ -53,7 +80,9 @@ pub enum BotShape {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Avatar {
-    /// A robot icon drawn in one of the palette colors.
+    /// A full-color bot picture.
+    Image { image: BotImage },
+    /// A robot glyph drawn in one of the palette colors (older bots).
     Icon { icon: BotIcon, color: String },
     /// A shape filled with one of the palette colors (older bots).
     Shape { shape: BotShape, color: String },
@@ -139,6 +168,23 @@ pub struct Schedule {
     pub task: String,
     /// Show an OS notification when the run finishes.
     pub notify: bool,
+}
+
+impl Bot {
+    /// Longest name the UI lets you type (`maxLength` of the name fields).
+    pub const MAX_NAME: usize = 60;
+
+    /// A name as typed, trimmed; an error if it's empty or too long.
+    pub fn clean_name(name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Bot name is required".into());
+        }
+        if name.chars().count() > Self::MAX_NAME {
+            return Err(format!("Bot name can be at most {} characters", Self::MAX_NAME));
+        }
+        Ok(name.to_string())
+    }
 }
 
 impl Default for Schedule {
@@ -269,6 +315,9 @@ pub enum MessageBody {
         confirmed: bool,
         #[serde(default)]
         previous: Option<AgentConfig>,
+        /// The new name, when a `/setup` change renames the bot.
+        #[serde(default)]
+        name: Option<String>,
         /// Replaced by a newer change, or `/setup` was closed without saving.
         #[serde(default)]
         discarded: bool,

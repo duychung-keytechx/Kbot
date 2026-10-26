@@ -5,6 +5,7 @@ import { formatListTime } from "../lib/format";
 import type { Bot } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { EditBotDialog } from "./EditBotDialog";
 import { describeSchedule } from "./fields";
 import { ClearIcon, ClockIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon } from "./Icons";
 import { WindowControls } from "./WindowControls";
@@ -30,8 +31,14 @@ export function Sidebar({
     return bots.filter((b) => b.name.toLowerCase().includes(q) || b.preview.toLowerCase().includes(q));
   }, [bots, query]);
 
+  const [width, setWidth] = useSidebarWidth();
+
   return (
-    <aside className="flex w-[290px] shrink-0 flex-col gap-3 border-r border-sidebar-line bg-sidebar pt-4 pr-3.5 pb-3.5 pl-3.5">
+    <aside
+      style={{ width }}
+      className="relative flex shrink-0 flex-col gap-3 border-r border-sidebar-line bg-sidebar pt-4 pr-3.5 pb-3.5 pl-3.5"
+    >
+      <ResizeHandle width={width} onResize={setWidth} />
       <div data-tauri-drag-region className="flex items-center gap-2 px-1">
         <WindowControls />
         {/* Ignores the pointer so the title bar stays draggable. */}
@@ -71,10 +78,83 @@ export function Sidebar({
   );
 }
 
+const DEFAULT_WIDTH = 290;
+const MIN_WIDTH = 220;
+const MAX_WIDTH = 420;
+const WIDTH_KEY = "kbot.sidebarWidth";
+
+const clampWidth = (w: number) => Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w)));
+
+/** The sidebar width, remembered across launches. */
+function useSidebarWidth() {
+  const [width, setWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(WIDTH_KEY));
+      return saved ? clampWidth(saved) : DEFAULT_WIDTH;
+    } catch {
+      return DEFAULT_WIDTH;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(WIDTH_KEY, String(width));
+    } catch {
+      // Not remembered; the width still applies for this session.
+    }
+  }, [width]);
+  return [width, (w: number) => setWidth(clampWidth(w))] as const;
+}
+
+/** Drag the sidebar's right edge to resize it; double-click restores the default width. */
+function ResizeHandle({ width, onResize }: { width: number; onResize: (width: number) => void }) {
+  const [dragging, setDragging] = useState(false);
+  // Where the drag began; null when not dragging. A ref, so moves that arrive before the re-render still count.
+  const start = useRef<{ x: number; width: number } | null>(null);
+
+  // Keep the resize cursor while the pointer runs ahead of the edge.
+  useEffect(() => {
+    if (!dragging) return;
+    document.body.style.cursor = "col-resize";
+    return () => {
+      document.body.style.cursor = "";
+    };
+  }, [dragging]);
+
+  const end = () => {
+    start.current = null;
+    setDragging(false);
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuenow={width}
+      aria-valuemin={MIN_WIDTH}
+      aria-valuemax={MAX_WIDTH}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        start.current = { x: e.clientX, width };
+        setDragging(true);
+      }}
+      onPointerMove={(e) => start.current && onResize(start.current.width + e.clientX - start.current.x)}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onDoubleClick={() => onResize(DEFAULT_WIDTH)}
+      className={`absolute inset-y-0 -right-[3px] z-10 w-[6px] cursor-col-resize transition-colors ${
+        dragging ? "bg-sidebar-line" : "hover:bg-sidebar-line"
+      }`}
+    />
+  );
+}
+
 function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; busy: boolean; onClick: () => void }) {
   // Right-click opens the context menu at the pointer.
   const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
-  const [confirm, setConfirm] = useState<"clear" | "delete">();
+  const [dialog, setDialog] = useState<"edit" | "clear" | "delete">();
   return (
     <>
       <button
@@ -92,7 +172,7 @@ function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; bus
         <BotAvatar avatar={bot.avatar} size={30} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex items-center gap-1.5">
-            <p className="min-w-0 truncate text-[14px] text-ink">{bot.name}</p>
+            <p className="min-w-0 truncate text-[14px] font-semibold text-ink">{bot.name}</p>
             {bot.config.schedule && (
               <span title={`Runs ${describeSchedule(bot.config.schedule)}`}>
                 <ClockIcon />
@@ -127,33 +207,30 @@ function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; bus
               label: "Edit",
               icon: <EditIcon />,
               disabled: busy,
-              // Opens the chat, where the setup is shown and changed as with `/setup`.
-              onSelect: () => {
-                onClick();
-                backend.startSetup(bot.id).catch((e) => console.error(e));
-              },
+              onSelect: () => setDialog("edit"),
             },
-            { label: "Clear History", icon: <ClearIcon />, onSelect: () => setConfirm("clear") },
-            { label: "Delete Chat", icon: <TrashIcon />, danger: true, onSelect: () => setConfirm("delete") },
+            { label: "Clear History", icon: <ClearIcon />, onSelect: () => setDialog("clear") },
+            { label: "Delete Chat", icon: <TrashIcon />, danger: true, onSelect: () => setDialog("delete") },
           ]}
         />
       )}
-      {confirm === "clear" && (
+      {dialog === "edit" && <EditBotDialog bot={bot} onClose={() => setDialog(undefined)} />}
+      {dialog === "clear" && (
         <ConfirmDialog
           title="Clear History"
           message={`Delete all messages with ${bot.name}? Its settings are kept. This can't be undone.`}
           confirmLabel="Clear History"
           onConfirm={() => backend.clearChat(bot.id)}
-          onClose={() => setConfirm(undefined)}
+          onClose={() => setDialog(undefined)}
         />
       )}
-      {confirm === "delete" && (
+      {dialog === "delete" && (
         <ConfirmDialog
           title="Delete Chat"
           message={`Delete ${bot.name} with its messages and settings? This can't be undone.`}
           confirmLabel="Delete"
           onConfirm={() => backend.deleteBot(bot.id)}
-          onClose={() => setConfirm(undefined)}
+          onClose={() => setDialog(undefined)}
         />
       )}
     </>

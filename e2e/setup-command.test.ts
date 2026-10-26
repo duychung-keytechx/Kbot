@@ -1,4 +1,4 @@
-// `/setup` (and "Edit" in a bot's menu) against the real app, with Claude Code
+// `/setup` and "Edit" in a bot's menu against the real app, with Claude Code
 // replaced by e2e/fake-claude.ts: changing a set-up bot, closing without
 // saving, and starting onboarding over for a bot that skipped it.
 //
@@ -25,7 +25,7 @@ afterEach(() => {
 const readBot = () => {
   const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
   try {
-    return db.prepare("SELECT setup_state, setup_step, config, claude_session_id FROM bots").get() as Record<
+    return db.prepare("SELECT name, setup_state, setup_step, config, claude_session_id FROM bots").get() as Record<
       string,
       string | null
     >;
@@ -58,7 +58,7 @@ test("/setup shows the current setup and saves a change made in words", async ()
   let savedSession: string | null;
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
     await onboardChatBot(browser, name);
     await send(browser, name, "hello there");
     await waitForText(browser, "Fake reply to: hello there");
@@ -127,12 +127,40 @@ test("/setup shows the current setup and saves a change made in words", async ()
   assert.ok(last.includes("--session-id") && sessionId !== savedSession, "new session after the update");
 });
 
+test("/setup renames the bot once the change is saved", async () => {
+  const session = await launch(dataDir);
+  try {
+    const { browser } = session;
+    await createBot(browser, "Planner");
+    await onboardChatBot(browser, "Planner");
+    const before = readBot().config;
+
+    await send(browser, "Planner", "/setup");
+    await waitForText(browser, "Here's my current setup.");
+    await send(browser, "Planner", "Rename yourself to Week Planner");
+    await waitForText(browser, "I'm Week Planner now.");
+    await waitForText(browser, "Here's my updated setup. Save it?");
+    await browser.$('//p[normalize-space()="Name"]/following-sibling::p[contains(., "Week Planner")]').waitForDisplayed();
+    assert.equal(readBot().name, "Planner", "not renamed before saving");
+    await browser.$(button("Save")).click();
+    await waitForText(browser, "Setup updated");
+    await browser.$(sidebarRow("Week Planner")).waitForExist();
+    assert.equal(readBot().config, before, "only the name changed");
+  } finally {
+    await session.close();
+  }
+
+  const row = readBot();
+  assert.equal(row.name, "Week Planner");
+  assert.equal(row.claude_session_id, null, "the new name starts a new chat session");
+});
+
 test("/setup on a bot that skipped setup starts onboarding", async () => {
   const name = "Skipper";
   const session = await launch(dataDir);
   try {
     const { browser } = session;
-    await createBot(browser, name, "buddy", "#1A73F0");
+    await createBot(browser, name, "bot02");
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Skip setup")).click();
     await waitForText(browser, "Type /setup any time to set me up.");
@@ -146,42 +174,46 @@ test("/setup on a bot that skipped setup starts onboarding", async () => {
   }
 });
 
-test("Edit in a bot's menu opens its chat and works like /setup", async () => {
+test("Edit in a bot's menu changes its setup in a dialog, not in the chat", async () => {
   const session = await launch(dataDir);
+  let before: Record<string, unknown>;
   try {
     const { browser } = session;
-    await createBot(browser, "Planner", "happy", "#1A73F0");
+    await createBot(browser, "Planner");
     await onboardChatBot(browser, "Planner");
-    await createBot(browser, "Skipper", "buddy", "#16B364");
-    await waitForText(browser, "Hi, I'm Skipper!");
-    await browser.$(button("Skip setup")).click();
-    await waitForText(browser, "Type /setup any time to set me up.");
+    before = JSON.parse(readBot().config!);
 
-    // From another bot's chat: opens Planner and shows its setup, with no "/setup" message.
+    // Cancel leaves the setup as it was.
     await contextMenu(browser, "Planner", "Edit");
-    await browser.$(`${sidebarRow("Planner")}[@aria-current="true"]`).waitForExist();
-    await waitForText(browser, "Here's my current setup.");
-    assert.equal(await browser.$$('//*[normalize-space()="/setup"]').length, 0);
-    await send(browser, "Planner", "Keep answers under 5 bullets");
-    await browser.$(button("Save")).click();
-    await waitForText(browser, "Setup updated");
+    const dialog = '//*[@role="dialog"][.//*[normalize-space()="Edit Planner"]]';
+    await browser.$(dialog).waitForDisplayed();
+    assert.equal(await browser.$("#edit-instructions").getValue(), before.instructions);
+    await browser.$("#edit-description").setValue("Plans weeks");
+    await browser.$(button("Cancel")).click();
+    await browser.$(dialog).waitForExist({ reverse: true });
+    assert.deepEqual(JSON.parse(readBot().config!), before);
 
-    // A bot that skipped setup starts it over.
-    await contextMenu(browser, "Skipper", "Edit");
-    await browser.$(`${sidebarRow("Skipper")}[@aria-current="true"]`).waitForExist();
-    await browser.$(`(//*[contains(text(), "Hi, I'm Skipper!")])[2]`).waitForDisplayed({ timeout: 10_000 });
+    await contextMenu(browser, "Planner", "Edit");
+    await browser.$("#edit-name").setValue("Week Planner");
+    await browser.$("#edit-description").setValue("Plans weeks");
+    await browser.$("#edit-instructions").setValue("Keep answers under 5 bullets");
+    await browser.$('//label[normalize-space()="Search the web"]//button[@role="switch"]').click();
+    await browser.$(button("Save")).click();
+    await browser.$(dialog).waitForExist({ reverse: true });
+    await browser.$(sidebarRow("Week Planner")).waitForExist();
+
+    // The chat shows no setup cards, unlike `/setup`.
+    assert.equal(await browser.$$('//*[contains(text(), "Here\'s my current setup.")]').length, 0);
   } finally {
     await session.close();
   }
 
-  const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
-  try {
-    const rows = db.prepare("SELECT name, setup_state, config FROM bots ORDER BY name").all() as Record<string, string>[];
-    assert.equal(rows[0].name, "Planner");
-    assert.equal(rows[0].setup_state, "done");
-    assert.match(JSON.parse(rows[0].config).instructions, /Keep answers under 5 bullets$/);
-    assert.equal(rows[1].setup_state, "pending");
-  } finally {
-    db.close();
-  }
+  const bot = readBot();
+  const config = JSON.parse(bot.config!);
+  assert.equal(bot.setup_state, "done");
+  assert.equal(bot.name, "Week Planner");
+  assert.equal(config.description, "Plans weeks");
+  assert.equal(config.instructions, "Keep answers under 5 bullets");
+  assert.equal(config.webAccess, false);
+  assert.deepEqual(config.schedule, before.schedule);
 });

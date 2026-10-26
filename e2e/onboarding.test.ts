@@ -27,7 +27,7 @@ test("a new bot is set up in the chat, then replies through Claude Code", async 
   const session = await launch(dataDir, { FAKE_CLAUDE_LOG: log });
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
 
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Run a daily job")).click();
@@ -106,7 +106,7 @@ test("a bot can run on an interval instead of daily", async () => {
   const session = await launch(dataDir, { FAKE_CLAUDE_LOG: log });
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
 
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Run on an interval")).click();
@@ -153,7 +153,7 @@ test("a bot can run on an interval instead of daily", async () => {
     // A result that comes in while another chat is open is unread until the bot is opened.
     const unread = `${sidebarRow(name)}//*[@data-testid="bot-unread"]`;
     assert.equal(await browser.$(unread).isExisting(), false, "a result seen as it came in is read");
-    await createBot(browser, "Other Bot", "buddy", "#16B364");
+    await createBot(browser, "Other Bot", "bot02");
     await waitForText(browser, "Hi, I'm Other Bot!");
     const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
     const { id } = db.prepare("SELECT id FROM bots WHERE name = ?").get(name) as { id: string };
@@ -188,7 +188,7 @@ test("a bot can do a task on a date, every month", async () => {
   const session = await launch(dataDir);
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
 
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Schedule a task")).click();

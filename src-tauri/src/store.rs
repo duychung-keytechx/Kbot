@@ -48,6 +48,8 @@ fn from_json<T: DeserializeOwned>(row: &Row, column: &str) -> rusqlite::Result<T
 fn bot_from_row(row: &Row) -> rusqlite::Result<Bot> {
     let color: String = row.get("color")?;
     let avatar = match row.get::<_, String>("kind")?.as_str() {
+        // Pictures are stored as icons with no color (see `insert_bot`).
+        "icon" if color.is_empty() => Avatar::Image { image: from_text(row, "icon")? },
         "icon" => Avatar::Icon { icon: from_text(row, "icon")?, color },
         _ => Avatar::Shape { shape: from_text(row, "shape")?, color },
     };
@@ -149,9 +151,12 @@ impl Store {
     }
 
     pub fn insert_bot(&mut self, bot: Bot) -> Result<(), String> {
+        // `kind` only allows 'icon' and 'shape' (migration 0001), and widening
+        // it means rebuilding `bots`, so a picture is an icon with no color.
         let (kind, icon, shape, color) = match &bot.avatar {
-            Avatar::Icon { icon, color } => ("icon", Some(to_text(icon)), None, color),
-            Avatar::Shape { shape, color } => ("shape", None, Some(to_text(shape)), color),
+            Avatar::Image { image } => ("icon", Some(to_text(image)), None, ""),
+            Avatar::Icon { icon, color } => ("icon", Some(to_text(icon)), None, color.as_str()),
+            Avatar::Shape { shape, color } => ("shape", None, Some(to_text(shape)), color.as_str()),
         };
         self.conn
             .execute(
@@ -267,6 +272,10 @@ impl Store {
         }
     }
 
+    pub fn set_name(&self, bot_id: &str, name: &str) -> Result<(), String> {
+        self.update_bot(bot_id, "name = ?2", &[&name])
+    }
+
     pub fn set_config(&self, bot_id: &str, config: &AgentConfig) -> Result<(), String> {
         let json = serde_json::to_string(config).map_err(err)?;
         self.update_bot(bot_id, "config = ?2", &[&json])
@@ -342,7 +351,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{BotIcon, Control, Schedule};
+    use crate::models::{BotIcon, BotImage, Control, Schedule};
 
     fn bot(id: &str, updated_at: i64) -> Bot {
         Bot {
@@ -371,6 +380,15 @@ mod tests {
             &bots[1].avatar,
             Avatar::Icon { icon: BotIcon::Happy, color } if color == "#ff8800"
         ));
+    }
+
+    #[test]
+    fn pictures_round_trip_next_to_older_avatars() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("old", 1)).unwrap();
+        store.insert_bot(Bot { avatar: Avatar::Image { image: BotImage::Bot07 }, ..bot("new", 2) }).unwrap();
+        assert!(matches!(store.bot("new").unwrap().avatar, Avatar::Image { image: BotImage::Bot07 }));
+        assert!(matches!(store.bot("old").unwrap().avatar, Avatar::Icon { icon: BotIcon::Happy, .. }));
     }
 
     #[test]
@@ -546,7 +564,7 @@ mod tests {
         assert_eq!(store.bot("a").unwrap().setup_state, SetupState::Done);
         assert_eq!(store.setup_step("a").unwrap(), None);
         assert!(!a.editing && !store.bot("a").unwrap().editing, "onboarding isn't editing");
-        store.set_setup("a", SetupState::Done, Some(&Step::Edit { draft: config.clone() })).unwrap();
+        store.set_setup("a", SetupState::Done, Some(&Step::Edit { draft: config.clone(), name: None })).unwrap();
         assert!(store.bot("a").unwrap().editing);
         assert!(store.set_config("missing", &config).is_err());
     }

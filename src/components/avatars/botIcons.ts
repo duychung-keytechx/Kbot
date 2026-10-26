@@ -1,6 +1,6 @@
-// Bot icons offered in the "Create New Bot" dialog. Glyphs come from open-source
-// icon sets via Iconify (licenses in THIRD_PARTY_NOTICES.md) and are drawn in
-// currentColor, so the avatar takes the bot's color.
+// Robot glyphs of older bots (new bots get a picture, see ImageAvatar). Glyphs
+// come from open-source icon sets via Iconify (licenses in THIRD_PARTY_NOTICES.md)
+// and are drawn in currentColor, so the avatar takes the bot's color.
 
 import type { BotIcon } from "../../lib/types";
 

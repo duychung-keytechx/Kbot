@@ -30,7 +30,7 @@ test("questions and tool approvals are answered in the chat", async () => {
     const { browser } = session;
     const spinner = `${sidebarRow(name)}//*[@data-testid="bot-working"]`;
     const status = (text: string) => `//*[@data-testid="permission-card"]//p[normalize-space()="${text}"]`;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name);
     await waitForText(browser, `Hi, I'm ${name}!`);
     await browser.$(button("Skip setup")).click();
     await waitForText(browser, "Type /setup any time to set me up.");

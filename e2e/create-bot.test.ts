@@ -26,11 +26,11 @@ test("a new bot is saved to SQLite and listed in the sidebar", async () => {
   let session = await launch(dataDir);
   try {
     const { browser } = session;
-    await createBot(browser, name, "happy", "#1A73F0");
+    await createBot(browser, name, "bot07");
 
     const row = browser.$(sidebarRow(name));
     assert.equal(await row.getAttribute("aria-current"), "true", "new bot is selected");
-    assert.equal((await row.$("svg").getCSSProperty("color")).parsed.hex, "#1a73f0");
+    assert.match(await row.$("img").getAttribute("src"), /bot07/);
     assert.equal(await browser.$('[role="dialog"]').isExisting(), false, "dialog closed");
   } finally {
     await session.close();
@@ -41,8 +41,8 @@ test("a new bot is saved to SQLite and listed in the sidebar", async () => {
     assert.deepEqual({ ...db.prepare("SELECT name, kind, icon, color FROM bots").all()[0] }, {
       name,
       kind: "icon",
-      icon: "happy",
-      color: "#1A73F0",
+      icon: "bot07",
+      color: "",
     });
   } finally {
     db.close();

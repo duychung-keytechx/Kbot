@@ -30,3 +30,6 @@ design/
 .env
 .env.*
 .claude/
+
+# macOS installers from scripts/build.sh
+release/

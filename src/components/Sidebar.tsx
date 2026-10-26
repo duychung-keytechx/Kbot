@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { backend } from "../lib/api";
 import { formatListTime } from "../lib/format";
 import type { Bot } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
-import { PlusIcon, SearchIcon } from "./Icons";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { ClearIcon, ClockIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
 import { WindowControls } from "./WindowControls";
 
 export function Sidebar({
@@ -57,23 +59,148 @@ export function Sidebar({
 }
 
 function BotRow({ bot, active, onClick }: { bot: Bot; active: boolean; onClick: () => void }) {
+  // Right-click opens the context menu at the pointer.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
+  const [confirm, setConfirm] = useState<"clear" | "delete">();
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={active || undefined}
-      className={`flex w-full shrink-0 items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left ${
-        active ? "bg-row-active" : "hover:bg-row-hover"
-      }`}
-    >
-      <BotAvatar avatar={bot.avatar} size={30} />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center gap-1.5">
-          <p className="min-w-0 flex-1 truncate text-[14px] text-ink">{bot.name}</p>
-          <p className="shrink-0 text-[12px] text-muted">{formatListTime(bot.updatedAt)}</p>
+    <>
+      <button
+        type="button"
+        onClick={onClick}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuAt({ x: e.clientX, y: e.clientY });
+        }}
+        aria-current={active || undefined}
+        className={`flex w-full shrink-0 items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left ${
+          active ? "bg-row-active" : menuAt ? "bg-row-hover" : "hover:bg-row-hover"
+        }`}
+      >
+        <BotAvatar avatar={bot.avatar} size={30} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex items-center gap-1.5">
+            <p className="min-w-0 truncate text-[14px] text-ink">{bot.name}</p>
+            {bot.config.schedule && (
+              <span title={`Daily job at ${bot.config.schedule.time}`}>
+                <ClockIcon />
+              </span>
+            )}
+            <div className="flex-1" />
+            <p className="shrink-0 text-[12px] text-muted">{formatListTime(bot.updatedAt)}</p>
+          </div>
+          <p className="truncate text-[12.5px] text-subtle">{bot.preview || "No messages yet"}</p>
         </div>
-        <p className="truncate text-[12.5px] text-subtle">{bot.preview || "No messages yet"}</p>
-      </div>
-    </button>
+      </button>
+      {menuAt && (
+        <ContextMenu
+          at={menuAt}
+          label={`${bot.name} options`}
+          onClose={() => setMenuAt(undefined)}
+          items={[
+            { label: "Clear History", icon: <ClearIcon />, onSelect: () => setConfirm("clear") },
+            { label: "Delete Chat", icon: <TrashIcon />, danger: true, onSelect: () => setConfirm("delete") },
+          ]}
+        />
+      )}
+      {confirm === "clear" && (
+        <ConfirmDialog
+          title="Clear History"
+          message={`Delete all messages with ${bot.name}? Its settings are kept. This can't be undone.`}
+          confirmLabel="Clear History"
+          onConfirm={() => backend.clearChat(bot.id)}
+          onClose={() => setConfirm(undefined)}
+        />
+      )}
+      {confirm === "delete" && (
+        <ConfirmDialog
+          title="Delete Chat"
+          message={`Delete ${bot.name} with its messages and settings? This can't be undone.`}
+          confirmLabel="Delete"
+          onConfirm={() => backend.deleteBot(bot.id)}
+          onClose={() => setConfirm(undefined)}
+        />
+      )}
+    </>
+  );
+}
+
+type MenuItem = { label: string; icon: ReactNode; danger?: boolean; onSelect: () => void };
+
+/** A right-click menu at the pointer, kept inside the window. Closes on a click elsewhere, Escape or scroll. */
+function ContextMenu({
+  at,
+  label,
+  items,
+  onClose,
+}: {
+  at: { x: number; y: number };
+  label: string;
+  items: MenuItem[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(at);
+
+  // Flip left/up when the menu would run off the window.
+  useLayoutEffect(() => {
+    const r = ref.current!.getBoundingClientRect();
+    setPos({
+      x: at.x + r.width + 8 > window.innerWidth ? Math.max(8, at.x - r.width) : at.x,
+      y: at.y + r.height + 8 > window.innerHeight ? Math.max(8, at.y - r.height) : at.y,
+    });
+  }, [at]);
+
+  useEffect(() => {
+    const outside = (e: Event) => ref.current?.contains(e.target as Node) || onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Next tick, so the right-click that opened the menu doesn't also close it.
+    const id = setTimeout(() => {
+      document.addEventListener("mousedown", outside);
+      document.addEventListener("contextmenu", outside);
+      document.addEventListener("scroll", outside, true);
+      document.addEventListener("keydown", onKey);
+      window.addEventListener("blur", onClose);
+    });
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("contextmenu", outside);
+      document.removeEventListener("scroll", outside, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={label}
+      style={{ left: pos.x, top: pos.y }}
+      onContextMenu={(e) => e.preventDefault()}
+      className="fixed z-40 flex w-[200px] flex-col rounded-[10px] border border-modal-line bg-white/95 p-1 shadow-[0_8px_28px_rgb(0_0_0/0.14)] backdrop-blur"
+    >
+      {items.map((item, i) => (
+        <Fragment key={item.label}>
+          {/* Destructive items sit below a divider, as in macOS menus. */}
+          {item.danger && i > 0 && <div className="mx-2 my-1 h-px bg-divider" />}
+          <button
+            type="button"
+            role="menuitem"
+            autoFocus={i === 0}
+            onClick={() => {
+              onClose();
+              item.onSelect();
+            }}
+            className={`flex items-center gap-2.5 rounded-[7px] px-2.5 py-[7px] text-left text-[13.5px] outline-none hover:bg-row-hover focus-visible:bg-row-hover ${
+              item.danger ? "text-[#e5322d]" : "text-ink"
+            }`}
+          >
+            <span className="flex w-4 justify-center">{item.icon}</span>
+            {item.label}
+          </button>
+        </Fragment>
+      ))}
+    </div>
   );
 }

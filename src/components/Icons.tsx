@@ -80,3 +80,47 @@ export const SendIcon = ({ color = "#FFFFFF", className }: IconProps) => (
 export const CloseIcon = ({ color = "#6B6B6B", className }: IconProps) => (
   <Stroke w={12} h={12} d="M0 0L12 12M12 0L0 12" color={color} width={1.5} round className={className} />
 );
+
+/** Composer "stop" while the bot is replying (10px filled square). */
+export const StopIcon = ({ color = "#FFFFFF", className }: IconProps) => (
+  <span className={`block size-[10px] shrink-0 rounded-[2px] ${className ?? ""}`} style={{ background: color }} />
+);
+
+/** Sidebar context menu: "Clear History" (14px circled ×). */
+export const ClearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+  <Stroke
+    w={14}
+    h={14}
+    d="M7 0.5C10.59 0.5 13.5 3.41 13.5 7C13.5 10.59 10.59 13.5 7 13.5C3.41 13.5 0.5 10.59 0.5 7C0.5 3.41 3.41 0.5 7 0.5ZM4.75 4.75L9.25 9.25M9.25 4.75L4.75 9.25"
+    color={color}
+    width={1.2}
+    round
+    className={className}
+  />
+);
+
+/** Sidebar context menu: "Delete Chat" (13×14 trash can). */
+export const TrashIcon = ({ color = "#E5322D", className }: IconProps) => (
+  <Stroke
+    w={13}
+    h={14}
+    d="M0.5 3H12.5M4.5 3V1.5C4.5 0.95 4.95 0.5 5.5 0.5H7.5C8.05 0.5 8.5 0.95 8.5 1.5V3M1.75 3L2.6 12.6C2.65 13.1 3.07 13.5 3.6 13.5H9.4C9.93 13.5 10.35 13.1 10.4 12.6L11.25 3M5.25 6V10.5M7.75 6V10.5"
+    color={color}
+    width={1.2}
+    round
+    className={className}
+  />
+);
+
+/** Sidebar: the bot has a daily job (11px). */
+export const ClockIcon = ({ color = "#8F8F8C", className }: IconProps) => (
+  <Stroke
+    w={11}
+    h={11}
+    d="M5.5 2.5L5.5 5.5L7.5 6.75M5.5 0C8.538 0 11 2.462 11 5.5C11 8.538 8.538 11 5.5 11C2.462 11 0 8.538 0 5.5C0 2.462 2.462 0 5.5 0Z"
+    color={color}
+    width={1.1}
+    round
+    className={className}
+  />
+);

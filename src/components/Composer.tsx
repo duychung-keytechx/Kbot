@@ -1,14 +1,27 @@
 import { useState } from "react";
-import { MicIcon, SendIcon, SmallPlusIcon } from "./Icons";
+import { MicIcon, SendIcon, SmallPlusIcon, StopIcon } from "./Icons";
 
-export function Composer({ botName, onSend }: { botName: string; onSend: (text: string) => void }) {
+export function Composer({
+  botName,
+  running,
+  onSend,
+  onStop,
+}: {
+  botName: string;
+  /** The bot is replying; the button stops it instead of sending. */
+  running: boolean;
+  /** Resolves false if the message was refused; the text is then kept. */
+  onSend: (text: string) => Promise<boolean>;
+  onStop: () => void;
+}) {
   const [text, setText] = useState("");
-  const canSend = text.trim().length > 0;
+  const canSend = text.trim().length > 0 && !running;
 
-  const send = () => {
+  const send = async () => {
     if (!canSend) return;
-    onSend(text);
+    const sent = text;
     setText("");
+    if (!(await onSend(sent))) setText((t) => t || sent);
   };
 
   return (
@@ -17,7 +30,7 @@ export function Composer({ botName, onSend }: { botName: string; onSend: (text: 
         className="flex items-center gap-2.5 self-stretch rounded-[23px] border border-composer-line bg-white py-1.5 pr-1.5 pl-2 shadow-[0_2px_6px_rgba(0,0,0,0.05)]"
         onSubmit={(e) => {
           e.preventDefault();
-          send();
+          void send();
         }}
       >
         {/* Attachments: not wired yet */}
@@ -30,14 +43,25 @@ export function Composer({ botName, onSend }: { botName: string; onSend: (text: 
           placeholder={`Message ${botName}`}
           className="min-w-0 flex-1 text-[14px] leading-[normal] text-ink"
         />
-        {/* Voice input is not wired yet; once there is text the button sends */}
-        <button
-          type={canSend ? "submit" : "button"}
-          aria-label={canSend ? "Send" : "Voice input"}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink-strong"
-        >
-          {canSend ? <SendIcon /> : <MicIcon />}
-        </button>
+        {running ? (
+          <button
+            type="button"
+            aria-label="Stop"
+            onClick={onStop}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink-strong"
+          >
+            <StopIcon />
+          </button>
+        ) : (
+          // Voice input is not wired yet; once there is text the button sends
+          <button
+            type={canSend ? "submit" : "button"}
+            aria-label={canSend ? "Send" : "Voice input"}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink-strong"
+          >
+            {canSend ? <SendIcon /> : <MicIcon />}
+          </button>
+        )}
       </form>
     </div>
   );

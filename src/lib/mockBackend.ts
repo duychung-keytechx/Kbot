@@ -6,10 +6,16 @@
 import type { Backend } from "./api";
 import {
   type AgentConfig,
+  type AppSettings,
   type Bot,
   type ClaudeStatus,
+  dateSchedule,
+  DEFAULT_MODEL,
   DEFAULT_SCHEDULE,
   EMPTY_CONFIG,
+  INTERVAL_SCHEDULE,
+  MAX_EVERY,
+  MIN_EVERY,
   type Message,
   type MessageBody,
   type MessageEvent,
@@ -21,6 +27,29 @@ type Step = "kind" | "description" | "schedule" | "web" | "workspace" | "clarify
 
 const CHAT = "Chat with me";
 const DAILY = "Run a daily job";
+const INTERVAL = "Run on an interval";
+const ON_DATE = "Schedule a task";
+
+/** `agent::describe_every`. */
+const describeEvery = (n: number) => (n === 60 ? "1 hour" : n % 60 === 0 ? `${n / 60} hours` : `${n} min`);
+
+/** `Schedule::validate`. */
+function validateSchedule(s: { time: string; days: unknown[]; everyMinutes: number | null; date: string | null; monthly: boolean }) {
+  if (s.everyMinutes !== null && !(Number.isInteger(s.everyMinutes) && s.everyMinutes >= MIN_EVERY && s.everyMinutes <= MAX_EVERY)) {
+    throw new Error(`Pick an interval from ${MIN_EVERY} minutes to 24 hours`);
+  }
+  if (s.everyMinutes === null && !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time)) throw new Error(`${s.time} is not a valid time`);
+  if (s.date !== null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s.date)) throw new Error(`${s.date} is not a valid date`);
+  } else if (s.days.length === 0) throw new Error("Pick at least one day");
+}
+
+/** `scheduler::check_date`: a one-time task set in the past would never run. */
+function checkDate(s: { time: string; date: string | null; monthly: boolean }) {
+  if (s.date !== null && !s.monthly && new Date(`${s.date}T${s.time}`).getTime() <= Date.now()) {
+    throw new Error("Pick a date and time in the future");
+  }
+}
 const BUSY = "Wait for the current reply to finish, or stop it.";
 const SETUP_COMMAND = "/setup";
 
@@ -32,6 +61,7 @@ const botListeners = new Set<(bots: Bot[]) => void>();
 const messageListeners = new Set<(e: MessageEvent) => void>();
 const runListeners = new Set<(e: RunEvent) => void>();
 const clearedListeners = new Set<(botId: string) => void>();
+let appSettings: AppSettings = { defaultModel: DEFAULT_MODEL };
 
 const wanted = new URLSearchParams(location.search).get("claude");
 let claude: ClaudeStatus =
@@ -189,21 +219,34 @@ function enter(botId: string, step: Step) {
         type: "setupChoice",
         step: "kind",
         question: `Hi, I'm ${name}! What should I do for you?`,
-        options: [CHAT, DAILY],
+        options: [CHAT, DAILY, INTERVAL, ON_DATE],
         selected: null,
       });
       break;
     case "description":
       push(botId, {
         type: "agent",
-        text: config.schedule
-          ? "Describe the job I should do each day.\n\nFor example: “Give me a morning brief of AI news and anything due today in my notes.”"
-          : "Describe what I should do.\n\nFor example: “Help me write replies to customer emails in a friendly, professional tone.”",
+        text: !config.schedule
+          ? "Describe what I should do.\n\nFor example: “Help me write replies to customer emails in a friendly, professional tone.”"
+          : config.schedule.date !== null
+            ? "Describe the task I should do.\n\nFor example: “Sum up last month's expenses from my notes and remind me to pay rent.”"
+            : config.schedule.everyMinutes === null
+            ? "Describe the job I should do each day.\n\nFor example: “Give me a morning brief of AI news and anything due today in my notes.”"
+            : "Describe the job I should do on each run.\n\nFor example: “Check my Downloads folder for new invoices and add them to my expenses sheet.”",
       });
       break;
     case "schedule": {
       const s = config.schedule ?? DEFAULT_SCHEDULE;
-      push(botId, { type: "setupSchedule", time: s.time, days: s.days, notify: s.notify, submitted: false });
+      push(botId, {
+        type: "setupSchedule",
+        time: s.time,
+        days: s.days,
+        everyMinutes: s.everyMinutes,
+        date: s.date,
+        monthly: s.monthly,
+        notify: s.notify,
+        submitted: false,
+      });
       break;
     }
     case "web":
@@ -249,7 +292,12 @@ function finish(botId: string, updated = false) {
   emitBots();
   const s = b.config.schedule;
   const done = updated ? "Setup updated" : "Setup complete";
-  push(botId, { type: "system", text: s ? `${done} · Next run: ${s.time}` : done });
+  const when = !s
+    ? ""
+    : s.everyMinutes !== null
+      ? ` · Runs every ${describeEvery(s.everyMinutes)}`
+      : ` · Next run: ${s.date !== null ? `${s.date} ` : ""}${s.time}`;
+  push(botId, { type: "system", text: done + when });
 }
 
 /** Marks an unsaved `/setup` change as not saved, like `setup::discard_changes`. */
@@ -303,7 +351,14 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
   switch (input.type) {
     case "setupChoice":
       if (input.step === "kind") {
-        config.schedule = input.selected === DAILY ? { ...DEFAULT_SCHEDULE } : null;
+        config.schedule =
+          input.selected === DAILY
+            ? { ...DEFAULT_SCHEDULE }
+            : input.selected === INTERVAL
+              ? { ...INTERVAL_SCHEDULE }
+              : input.selected === ON_DATE
+                ? dateSchedule()
+                : null;
         enter(botId, "description");
       } else {
         config.webAccess = input.selected === "Yes";
@@ -311,7 +366,15 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
       }
       break;
     case "setupSchedule":
-      config.schedule = { ...(config.schedule ?? DEFAULT_SCHEDULE), time: input.time, days: input.days, notify: input.notify };
+      config.schedule = {
+        ...(config.schedule ?? DEFAULT_SCHEDULE),
+        time: input.time,
+        days: input.days,
+        everyMinutes: input.everyMinutes,
+        date: input.date,
+        monthly: input.monthly,
+        notify: input.notify,
+      };
       enter(botId, "web");
       break;
     case "setupFolders":
@@ -414,8 +477,10 @@ export const mockBackend: Backend = {
         break;
       case "setupSchedule":
         if (answer.type !== "schedule" || message.submitted) throw new Error("This question was already answered.");
-        if (answer.days.length === 0) throw new Error("Pick at least one day");
-        Object.assign(message, { time: answer.time, days: answer.days, notify: answer.notify, submitted: true });
+        validateSchedule(answer);
+        checkDate(answer);
+        const { time, days, everyMinutes, date, monthly, notify } = answer;
+        Object.assign(message, { time, days, everyMinutes, date, monthly, notify, submitted: true });
         break;
       case "setupFolders":
         if (answer.type !== "folders" || message.submitted) throw new Error("This question was already answered.");
@@ -479,8 +544,13 @@ export const mockBackend: Backend = {
     emitBots();
   },
   updateBotConfig: async (botId, config: AgentConfig) => {
-    if (config.schedule && config.schedule.days.length === 0) throw new Error("Pick at least one day");
     const b = bot(botId);
+    const old = b.config.schedule;
+    if (config.schedule) {
+      validateSchedule(config.schedule);
+      const s = config.schedule;
+      if (!old || old.date !== s.date || old.time !== s.time || old.monthly !== s.monthly) checkDate(s);
+    }
     b.config = structuredClone(config);
     emitBots();
     return structuredClone(b);
@@ -489,8 +559,18 @@ export const mockBackend: Backend = {
     if (running.has(botId)) throw new Error(BUSY);
     const b = bot(botId);
     b.lastRunAt = Date.now();
-    push(botId, { type: "system", text: "Daily job · Run now" });
+    if (!b.config.schedule) throw new Error("This bot has no scheduled job.");
+    const s = b.config.schedule;
+    const job = s.everyMinutes !== null ? `Every ${describeEvery(s.everyMinutes)}` : s.date !== null ? "Scheduled task" : "Daily job";
+    push(botId, { type: "system", text: `${job} · Run now` });
     reply(botId, `Here's today's result for: ${b.config.schedule?.task || b.config.description} (Browser mock)`);
+  },
+  getAppSettings: async () => ({ ...appSettings }),
+  updateAppSettings: async (settings) => {
+    const defaultModel = settings.defaultModel.trim();
+    if (!defaultModel) throw new Error("Choose a model");
+    appSettings = { defaultModel };
+    return { ...appSettings };
   },
   pickFolder: async () => prompt("Folder path (browser mock)") || null,
   onBots: (cb) => {
@@ -510,4 +590,5 @@ export const mockBackend: Backend = {
     return () => runListeners.delete(cb);
   },
   onClaudeStatus: () => () => {},
+  onOpenSettings: () => () => {},
 };

@@ -73,7 +73,7 @@ pub struct Bot {
     pub preview: String,
     pub setup_state: SetupState,
     pub config: AgentConfig,
-    /// Unix epoch milliseconds of the last daily job run.
+    /// Unix epoch milliseconds of the last scheduled job run.
     pub last_run_at: Option<i64>,
     /// A set-up bot is being changed with `/setup` (see `setup::Step::Edit`).
     #[serde(default)]
@@ -99,21 +99,39 @@ pub struct AgentConfig {
     pub description: String,
     /// Claude's rewrite of `description`; the agent's system prompt. User-editable.
     pub instructions: String,
-    /// `None` = chat agent; `Some` = also runs a job every day.
+    /// `None` = chat agent; `Some` = also runs a job by itself: daily, on an interval or on a date.
     pub schedule: Option<Schedule>,
     /// Folders the agent may read.
     pub workspace_folders: Vec<String>,
     pub web_access: bool,
-    /// Claude Code `--model` value (e.g. "sonnet"); `None` = CLI default.
+    /// Claude Code `--model` value (e.g. "sonnet"); `None` = `AppSettings::default_model`.
     pub model: Option<String>,
+}
+
+/// Claude Code `--model` for bots that don't pick their own.
+pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
+
+/// App-wide preferences, edited in Kbot > Settings…. Stored as rows of `app_settings`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    /// Claude Code `--model` for bots whose `AgentConfig::model` is `None`.
+    pub default_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Schedule {
-    /// Local time, "HH:MM".
+    /// Local time, "HH:MM", of a daily job or a task on a date. Unused on an interval.
     pub time: String,
+    /// The days it runs, daily or on an interval. Unused on a date.
     pub days: Vec<Weekday>,
+    /// `None` = once a day at `time`, or on `date`; `Some(n)` = every `n` minutes.
+    pub every_minutes: Option<u32>,
+    /// "YYYY-MM-DD": a task that runs on this date at `time` instead of daily.
+    pub date: Option<String>,
+    /// A task on a date repeats every month on that day of the month.
+    pub monthly: bool,
     /// What to do on each run.
     pub task: String,
     /// Show an OS notification when the run finishes.
@@ -122,7 +140,58 @@ pub struct Schedule {
 
 impl Default for Schedule {
     fn default() -> Self {
-        Self { time: "08:00".into(), days: Weekday::ALL.to_vec(), task: String::new(), notify: true }
+        Self {
+            time: "08:00".into(),
+            days: Weekday::ALL.to_vec(),
+            every_minutes: None,
+            date: None,
+            monthly: false,
+            task: String::new(),
+            notify: true,
+        }
+    }
+}
+
+impl Schedule {
+    /// Shortest and longest interval, in minutes.
+    pub const MIN_EVERY: u32 = 5;
+    pub const MAX_EVERY: u32 = 24 * 60;
+    /// Interval a new interval job starts with.
+    pub const DEFAULT_EVERY: u32 = 30;
+
+    /// A new interval job. Not notifying: a notification every few minutes is noise.
+    pub fn interval() -> Self {
+        Self { every_minutes: Some(Self::DEFAULT_EVERY), notify: false, ..Self::default() }
+    }
+
+    /// A new task on `date`, at the default time.
+    pub fn on_date(date: chrono::NaiveDate) -> Self {
+        Self { date: Some(date.format("%Y-%m-%d").to_string()), ..Self::default() }
+    }
+
+    /// `date`, if it's a task on a date.
+    pub fn parsed_date(&self) -> Option<chrono::NaiveDate> {
+        chrono::NaiveDate::parse_from_str(self.date.as_deref()?, "%Y-%m-%d").ok()
+    }
+
+    /// Checks `every_minutes`, or `time` for a daily job or a task on a date,
+    /// and `days`, or `date` for a task on a date.
+    pub fn validate(&self) -> Result<(), String> {
+        match self.every_minutes {
+            Some(n) if !(Self::MIN_EVERY..=Self::MAX_EVERY).contains(&n) => {
+                return Err(format!("Pick an interval from {} minutes to 24 hours", Self::MIN_EVERY));
+            }
+            Some(_) if self.date.is_some() => return Err("An interval job can't also run on a date".into()),
+            Some(_) => {}
+            None if !crate::setup::valid_time(&self.time) => return Err(format!("{} is not a valid time", self.time)),
+            None => {}
+        }
+        match &self.date {
+            Some(date) if self.parsed_date().is_none() => Err(format!("{date} is not a valid date")),
+            Some(_) => Ok(()),
+            None if self.days.is_empty() => Err("Pick at least one day".into()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -173,8 +242,21 @@ pub enum MessageBody {
     Computer { prompt: String, control: Control },
     /// Onboarding question answered with one of a few buttons.
     SetupChoice { step: String, question: String, options: Vec<String>, selected: Option<String> },
-    /// Onboarding: when a daily job runs.
-    SetupSchedule { time: String, days: Vec<Weekday>, notify: bool, submitted: bool },
+    /// Onboarding: when a job runs; `every_minutes` set for an interval job,
+    /// `date` for a task on a date.
+    SetupSchedule {
+        time: String,
+        days: Vec<Weekday>,
+        // Variant fields aren't renamed by `rename_all`; the UI reads camelCase.
+        #[serde(default, rename = "everyMinutes")]
+        every_minutes: Option<u32>,
+        #[serde(default)]
+        date: Option<String>,
+        #[serde(default)]
+        monthly: bool,
+        notify: bool,
+        submitted: bool,
+    },
     /// Onboarding: folders the agent may read.
     SetupFolders { folders: Vec<String>, submitted: bool },
     /// Onboarding: the final config for the user to confirm or edit. With
@@ -272,7 +354,17 @@ impl Message {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SetupAnswer {
     Choice { option: String },
-    Schedule { time: String, days: Vec<Weekday>, notify: bool },
+    Schedule {
+        time: String,
+        days: Vec<Weekday>,
+        #[serde(default, rename = "everyMinutes")]
+        every_minutes: Option<u32>,
+        #[serde(default)]
+        date: Option<String>,
+        #[serde(default)]
+        monthly: bool,
+        notify: bool,
+    },
     Folders { folders: Vec<String> },
     Review { instructions: String, task: Option<String> },
 }

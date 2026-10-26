@@ -22,6 +22,8 @@ pub struct AppState {
     pub claude: claude::Claude,
 }
 
+const SETTINGS_MENU_ID: &str = "settings";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -49,7 +51,24 @@ pub fn run() {
                 claude: claude::Claude::default(),
             });
             scheduler::start(app.handle().clone());
+            // The standard macOS menu bar, plus Kbot > Settings… (⌘,).
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+                let menu = Menu::default(app.handle())?;
+                if let Some(app_menu) = menu.items()?.first().and_then(|m| m.as_submenu()) {
+                    let settings = MenuItem::with_id(app, SETTINGS_MENU_ID, "Settings…", true, Some("CmdOrCtrl+,"))?;
+                    // Below "About Kbot" and its separator.
+                    app_menu.insert_items(&[&settings, &PredefinedMenuItem::separator(app)?], 2)?;
+                }
+                app.set_menu(menu)?;
+            }
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == SETTINGS_MENU_ID {
+                events::open_settings(app);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_bots,
@@ -71,6 +90,8 @@ pub fn run() {
             commands::delete_bot,
             commands::update_bot_config,
             commands::run_now,
+            commands::get_app_settings,
+            commands::update_app_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

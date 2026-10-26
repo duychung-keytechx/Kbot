@@ -6,6 +6,7 @@ import { formatListTime } from "../lib/format";
 import type { Bot } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { describeSchedule } from "./fields";
 import { ClearIcon, ClockIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon } from "./Icons";
 import { WindowControls } from "./WindowControls";
 
@@ -94,7 +95,7 @@ function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; bus
           <div className="flex items-center gap-1.5">
             <p className="min-w-0 truncate text-[14px] text-ink">{bot.name}</p>
             {bot.config.schedule && (
-              <span title={`Daily job at ${bot.config.schedule.time}`}>
+              <span title={`Runs ${describeSchedule(bot.config.schedule)}`}>
                 <ClockIcon />
               </span>
             )}

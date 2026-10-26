@@ -26,6 +26,8 @@ use crate::AppState;
 
 pub const CHAT: &str = "Chat with me";
 pub const DAILY: &str = "Run a daily job";
+pub const INTERVAL: &str = "Run on an interval";
+pub const ON_DATE: &str = "Schedule a task";
 pub const YES: &str = "Yes";
 pub const NO: &str = "No";
 /// Typed in the chat to set a bot up, or to change its setup.
@@ -87,9 +89,15 @@ pub fn apply(step: &Step, input: Input, config: &mut AgentConfig) -> Result<Next
     use SetupAnswer as A;
     let next = match (step, input) {
         (Step::Kind, Input::Card(A::Choice { option })) => {
+            let previous = config.schedule.take();
             config.schedule = match option.as_str() {
                 CHAT => None,
-                DAILY => Some(config.schedule.take().unwrap_or_default()),
+                DAILY => Some(previous.filter(|s| s.every_minutes.is_none() && s.date.is_none()).unwrap_or_default()),
+                INTERVAL => Some(previous.filter(|s| s.every_minutes.is_some()).unwrap_or_else(Schedule::interval)),
+                ON_DATE => Some(previous.filter(|s| s.date.is_some()).unwrap_or_else(|| {
+                    let today = chrono::Local::now().date_naive();
+                    Schedule::on_date(today.succ_opt().unwrap_or(today))
+                })),
                 _ => return Err(format!("unknown option {option}")),
             };
             Next::Ask(Step::Description)
@@ -98,17 +106,16 @@ pub fn apply(step: &Step, input: Input, config: &mut AgentConfig) -> Result<Next
             config.description = text;
             Next::Ask(if config.schedule.is_some() { Step::Schedule } else { Step::Web })
         }
-        (Step::Schedule, Input::Card(A::Schedule { time, days, notify })) => {
-            if !valid_time(&time) {
-                return Err(format!("{time} is not a valid time"));
-            }
-            if days.is_empty() {
-                return Err("Pick at least one day".into());
-            }
-            let schedule = config.schedule.get_or_insert_with(Schedule::default);
-            schedule.time = time;
-            schedule.days = Weekday::ALL.into_iter().filter(|d| days.contains(d)).collect();
-            schedule.notify = notify;
+        (Step::Schedule, Input::Card(A::Schedule { time, days, every_minutes, date, monthly, notify })) => {
+            let previous = config.schedule.clone().unwrap_or_default();
+            // An interval job keeps a valid time, used if it becomes a daily job.
+            let time = if every_minutes.is_some() && !valid_time(&time) { previous.time } else { time };
+            let days = Weekday::ALL.into_iter().filter(|d| days.contains(d)).collect();
+            let monthly = monthly && date.is_some();
+            let schedule = Schedule { time, days, every_minutes, date, monthly, task: previous.task, notify };
+            schedule.validate()?;
+            crate::scheduler::check_date(&schedule, None, chrono::Local::now())?;
+            config.schedule = Some(schedule);
             Next::Ask(Step::Web)
         }
         (Step::Web, Input::Card(A::Choice { option })) => {
@@ -185,8 +192,12 @@ fn card_matches(step: &Step, body: &MessageBody) -> bool {
 fn mark_answered(body: &mut MessageBody, answer: &SetupAnswer) {
     match (body, answer) {
         (MessageBody::SetupChoice { selected, .. }, SetupAnswer::Choice { option }) => *selected = Some(option.clone()),
-        (MessageBody::SetupSchedule { time, days, notify, submitted }, SetupAnswer::Schedule { time: t, days: d, notify: n }) => {
-            (*time, *days, *notify, *submitted) = (t.clone(), d.clone(), *n, true);
+        (
+            MessageBody::SetupSchedule { time, days, every_minutes, date, monthly, notify, submitted },
+            SetupAnswer::Schedule { time: t, days: d, every_minutes: e, date: dt, monthly: m, notify: n },
+        ) => {
+            (*time, *days, *every_minutes, *notify, *submitted) = (t.clone(), d.clone(), *e, *n, true);
+            (*date, *monthly) = (dt.clone(), *m && dt.is_some());
         }
         (MessageBody::SetupFolders { folders, submitted }, SetupAnswer::Folders { folders: f }) => {
             (*folders, *submitted) = (dedupe(f.clone()), true);
@@ -359,20 +370,29 @@ fn enter(app: &AppHandle, bot: &Bot, step: Step) -> Result<(), String> {
         Step::Kind => MessageBody::SetupChoice {
             step: "kind".into(),
             question: format!("Hi, I'm {}! What should I do for you?", bot.name),
-            options: vec![CHAT.into(), DAILY.into()],
+            options: vec![CHAT.into(), DAILY.into(), INTERVAL.into(), ON_DATE.into()],
             selected: None,
         },
         Step::Description => MessageBody::Agent {
-            text: if config.schedule.is_some() {
-                "Describe the job I should do each day.\n\nFor example: \u{201c}Give me a morning brief of AI news and anything due today in my notes.\u{201d}"
-            } else {
-                "Describe what I should do.\n\nFor example: \u{201c}Help me write replies to customer emails in a friendly, professional tone.\u{201d}"
+            text: match config.schedule.as_ref().map(|s| s.every_minutes) {
+                Some(None) if config.schedule.as_ref().is_some_and(|s| s.date.is_some()) => "Describe the task I should do.\n\nFor example: \u{201c}Sum up last month's expenses from my notes and remind me to pay rent.\u{201d}",
+                Some(None) => "Describe the job I should do each day.\n\nFor example: \u{201c}Give me a morning brief of AI news and anything due today in my notes.\u{201d}",
+                Some(Some(_)) => "Describe the job I should do on each run.\n\nFor example: \u{201c}Check my Downloads folder for new invoices and add them to my expenses sheet.\u{201d}",
+                None => "Describe what I should do.\n\nFor example: \u{201c}Help me write replies to customer emails in a friendly, professional tone.\u{201d}",
             }
             .into(),
         },
         Step::Schedule => {
             let schedule = config.schedule.clone().unwrap_or_default();
-            MessageBody::SetupSchedule { time: schedule.time, days: schedule.days, notify: schedule.notify, submitted: false }
+            MessageBody::SetupSchedule {
+                time: schedule.time,
+                days: schedule.days,
+                every_minutes: schedule.every_minutes,
+                date: schedule.date,
+                monthly: schedule.monthly,
+                notify: schedule.notify,
+                submitted: false,
+            }
         }
         Step::Web => MessageBody::SetupChoice {
             step: "web".into(),
@@ -414,8 +434,13 @@ fn finish(app: &AppHandle, bot: &Bot, updated: bool) -> Result<(), String> {
         s.set_session_id(&bot.id, None)
     })?;
     let mut text = if updated { "Setup updated" } else { "Setup complete" }.to_string();
-    if let Some(next) = bot.config.schedule.as_ref().and_then(|s| crate::scheduler::next_run(s, chrono::Local::now())) {
-        text += &format!(" \u{b7} Next run: {}", crate::scheduler::describe_next_run(next, chrono::Local::now()));
+    if let Some(schedule) = &bot.config.schedule {
+        let now = chrono::Local::now();
+        if let Some(n) = schedule.every_minutes {
+            text += &format!(" \u{b7} Runs every {}", agent::describe_every(n));
+        } else if let Some(next) = crate::scheduler::next_run(schedule, now) {
+            text += &format!(" \u{b7} Next run: {}", crate::scheduler::describe_next_run(next, now));
+        }
     }
     post(app, &bot.id, MessageBody::System { text });
     events::bots_changed(app);
@@ -440,7 +465,7 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
     let bot = store_op(app, |s| s.bot(bot_id))?;
     let summary = describe_for_claude(&bot);
     let ask = |system: String, prompt: String, schema: serde_json::Value| {
-        let (app, cancel, model) = (app.clone(), ticket.cancel.clone(), bot.config.model.clone());
+        let (app, cancel, model) = (app.clone(), ticket.cancel.clone(), Some(agent::model(app, &bot)));
         async move {
             let bin = agent::ready_binary(&app).await?;
             claude::ask_json(&bin, agent::workdir(&app, bot_id), system, prompt, schema, model, cancel).await
@@ -518,7 +543,14 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
             match result {
                 Ok(v) => {
                     let is_dir = |p: &str| Path::new(p).is_absolute() && Path::new(p).is_dir();
-                    let (config, note) = apply_edit(draft, &v, is_dir);
+                    let (mut config, mut note) = apply_edit(draft, &v, is_dir);
+                    let now = chrono::Local::now();
+                    if let Some(Err(e)) =
+                        config.schedule.as_ref().map(|s| crate::scheduler::check_date(s, draft.schedule.as_ref(), now))
+                    {
+                        config.schedule = draft.schedule.clone();
+                        note = [note, format!("{e}, so I kept the schedule as it was.")].join("\n\n").trim().to_string();
+                    }
                     let mut follow_up: Vec<MessageBody> = Vec::new();
                     if !note.is_empty() {
                         follow_up.push(MessageBody::Agent { text: note });
@@ -566,11 +598,19 @@ fn describe_for_claude(bot: &Bot) -> String {
     let mut s = format!("Agent name: {}\n", bot.name);
     match &config.schedule {
         Some(schedule) => {
-            s += &format!(
-                "Kind: daily job, runs {} at {} and posts the result in the chat\n",
-                agent::describe_days(&schedule.days),
-                schedule.time
-            )
+            let days = agent::describe_days(&schedule.days);
+            s += &match schedule.every_minutes {
+                None if schedule.date.is_some() => format!(
+                    "Kind: scheduled task, runs {} at {} and posts the result in the chat\n",
+                    agent::describe_date(schedule).unwrap_or_default(),
+                    schedule.time
+                ),
+                None => format!("Kind: daily job, runs {days} at {} and posts the result in the chat\n", schedule.time),
+                Some(n) => format!(
+                    "Kind: scheduled job, runs every {} ({days}) and posts the result in the chat\n",
+                    agent::describe_every(n)
+                ),
+            }
         }
         None => s += "Kind: chat agent, answers the user's messages\n",
     }
@@ -586,14 +626,17 @@ fn describe_for_claude(bot: &Bot) -> String {
 
 /// What Claude gets for a `/setup` change: the setup so far and the request.
 fn describe_edit(bot: &Bot, draft: &AgentConfig, request: &str) -> String {
-    // A chat agent shows the default schedule, used if it becomes a daily job.
+    // A chat agent shows the default schedule, used if it becomes a scheduled job.
     let schedule = draft.schedule.clone().unwrap_or_default();
     let current = json!({
         "description": draft.description,
         "instructions": draft.instructions,
-        "dailyJob": draft.schedule.is_some(),
+        "scheduledJob": draft.schedule.is_some(),
+        "everyMinutes": schedule.every_minutes.unwrap_or(0),
         "time": schedule.time,
         "days": schedule.days,
+        "date": schedule.date.unwrap_or_default(),
+        "monthly": schedule.monthly,
         "notify": schedule.notify,
         "task": schedule.task,
         "webAccess": draft.web_access,
@@ -611,16 +654,19 @@ fn edit_schema() -> Value {
         "properties": {
             "description": text,
             "instructions": text,
-            "dailyJob": flag,
+            "scheduledJob": flag,
+            "everyMinutes": {"type": "integer"},
             "time": text,
             "days": {"type": "array", "items": {"type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}},
+            "date": text,
+            "monthly": flag,
             "notify": flag,
             "task": text,
             "webAccess": flag,
             "workspaceFolders": {"type": "array", "items": {"type": "string"}},
             "note": text
         },
-        "required": ["description", "instructions", "dailyJob", "time", "days", "notify", "task", "webAccess", "workspaceFolders", "note"],
+        "required": ["description", "instructions", "scheduledJob", "everyMinutes", "time", "days", "date", "monthly", "notify", "task", "webAccess", "workspaceFolders", "note"],
         "additionalProperties": false
     })
 }
@@ -637,10 +683,18 @@ pub fn apply_edit(draft: &AgentConfig, v: &Value, is_dir: impl Fn(&str) -> bool)
     if let Some(web) = v["webAccess"].as_bool() {
         config.web_access = web;
     }
-    match v["dailyJob"].as_bool() {
+    match v["scheduledJob"].as_bool() {
         Some(false) => config.schedule = None,
         Some(true) => {
             let schedule = config.schedule.get_or_insert_with(Schedule::default);
+            match v["everyMinutes"].as_u64() {
+                Some(0) => schedule.every_minutes = None,
+                Some(n) => {
+                    let n = u32::try_from(n).unwrap_or(u32::MAX).clamp(Schedule::MIN_EVERY, Schedule::MAX_EVERY);
+                    schedule.every_minutes = Some(n);
+                }
+                None => {}
+            }
             if let Some(time) = text("time").and_then(|t| chrono::NaiveTime::parse_from_str(&t, "%H:%M").ok()) {
                 schedule.time = time.format("%H:%M").to_string();
             }
@@ -648,6 +702,23 @@ pub fn apply_edit(draft: &AgentConfig, v: &Value, is_dir: impl Fn(&str) -> bool)
             if !days.is_empty() {
                 schedule.days = Weekday::ALL.into_iter().filter(|d| days.contains(d)).collect();
             }
+            // "" makes it daily again; a date that doesn't parse is ignored; an interval has none.
+            match v["date"].as_str().map(str::trim) {
+                Some("") => schedule.date = None,
+                Some(date) => {
+                    if let Ok(date) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+                        schedule.date = Some(date.format("%Y-%m-%d").to_string());
+                    }
+                }
+                None => {}
+            }
+            if schedule.every_minutes.is_some() {
+                schedule.date = None;
+            }
+            if let Some(monthly) = v["monthly"].as_bool() {
+                schedule.monthly = monthly;
+            }
+            schedule.monthly &= schedule.date.is_some();
             if let Some(notify) = v["notify"].as_bool() {
                 schedule.notify = notify;
             }
@@ -693,7 +764,8 @@ const REVIEW_PROMPT: &str = "You help a user set up a personal AI agent in Kbot,
 From the agent's setup and the user's answers, write:\n\
 - instructions: the agent's instructions, addressed to the agent as \"you\". Concise and concrete: its purpose, what to focus on, \
 output format and tone. Include every preference the user stated. Plain text, no Markdown headings.\n\
-- task: for a daily job, what to do on each run, in one short paragraph. For a chat agent, an empty string.\n\
+- task: for a job that runs by itself (daily, on an interval or on a date), what to do on each run, in one short paragraph. \
+For a chat agent, an empty string.\n\
 Write both in the language of the user's description.";
 
 const EDIT_PROMPT: &str = "You help a user change the setup of their personal AI agent in Kbot, a desktop app. \
@@ -702,7 +774,10 @@ You get the agent's current setup as JSON and the user's change request. Return 
 - description: one or two sentences on what the agent does.\n\
 - instructions: the agent's instructions, addressed to the agent as \"you\". Concise and concrete, plain text, no Markdown headings. \
 Work a new preference into them rather than appending the request.\n\
-- dailyJob: whether the agent also runs a job by itself every day. time: local 24-hour \"HH:MM\". days: the days it runs. \
+- scheduledJob: whether the agent also runs a job by itself. everyMinutes: 0 for once a day at time (or on date), or run every \
+this many minutes (5 to 1440). time: local 24-hour \"HH:MM\" of a daily run or a run on date. days: the days it runs daily or on \
+an interval. date: \"YYYY-MM-DD\" for a task that runs once on that date instead of daily (everyMinutes 0), or \"\" for none. \
+monthly: a task on a date repeats every month on that day. \
 notify: show a notification when a run finishes. task: what to do on each run, one short paragraph.\n\
 - webAccess: whether it can search the web.\n\
 - workspaceFolders: absolute paths of folders it works with. Add or remove only folders the user names.\n\
@@ -727,7 +802,14 @@ mod tests {
             apply(&Step::Description, Input::Text("AI news brief".into()), &mut config),
             Ok(Next::Ask(Step::Schedule))
         );
-        let schedule = SetupAnswer::Schedule { time: "07:30".into(), days: vec![Weekday::Fri, Weekday::Mon], notify: false };
+        let schedule = SetupAnswer::Schedule {
+            time: "07:30".into(),
+            days: vec![Weekday::Fri, Weekday::Mon],
+            every_minutes: None,
+            date: None,
+            monthly: false,
+            notify: false,
+        };
         assert_eq!(apply(&Step::Schedule, Input::Card(schedule), &mut config), Ok(Next::Ask(Step::Web)));
         assert_eq!(apply(&Step::Web, choice(YES), &mut config), Ok(Next::Ask(Step::Workspace)));
         let folders = SetupAnswer::Folders { folders: vec!["/a".into(), "/a".into(), " ".into()] };
@@ -755,6 +837,76 @@ mod tests {
     }
 
     #[test]
+    fn interval_job_runs_every_few_minutes() {
+        let mut config = AgentConfig::default();
+        apply(&Step::Kind, choice(INTERVAL), &mut config).unwrap();
+        assert_eq!(config.schedule, Some(Schedule::interval()));
+        assert_eq!(
+            apply(&Step::Description, Input::Text("Check the build".into()), &mut config),
+            Ok(Next::Ask(Step::Schedule))
+        );
+        // The time card field is ignored on an interval.
+        let schedule = SetupAnswer::Schedule {
+            time: "".into(),
+            days: Weekday::ALL.to_vec(),
+            every_minutes: Some(15),
+            date: None,
+            monthly: false,
+            notify: true,
+        };
+        assert_eq!(apply(&Step::Schedule, Input::Card(schedule), &mut config), Ok(Next::Ask(Step::Web)));
+        let schedule = config.schedule.as_ref().unwrap();
+        assert_eq!((schedule.every_minutes, schedule.notify, schedule.time.as_str()), (Some(15), true, "08:00"));
+
+        // Going back to the kind step switches between daily and interval.
+        apply(&Step::Kind, choice(DAILY), &mut config).unwrap();
+        assert_eq!(config.schedule, Some(Schedule::default()));
+        apply(&Step::Kind, choice(INTERVAL), &mut config).unwrap();
+        assert_eq!(config.schedule.and_then(|s| s.every_minutes), Some(Schedule::DEFAULT_EVERY));
+    }
+
+    #[test]
+    fn a_task_runs_on_a_date() {
+        let mut config = AgentConfig::default();
+        apply(&Step::Kind, choice(ON_DATE), &mut config).unwrap();
+        let tomorrow = chrono::Local::now().date_naive().succ_opt().unwrap();
+        assert_eq!(config.schedule, Some(Schedule::on_date(tomorrow)), "tomorrow at 08:00 to start with");
+        apply(&Step::Description, Input::Text("Pay rent".into()), &mut config).unwrap();
+        let card = |date: &str, monthly| {
+            Input::Card(SetupAnswer::Schedule {
+                time: "09:15".into(),
+                days: Weekday::ALL.to_vec(),
+                every_minutes: None,
+                date: Some(date.into()),
+                monthly,
+                notify: true,
+            })
+        };
+        assert_eq!(apply(&Step::Schedule, card("2099-01-31", true), &mut config), Ok(Next::Ask(Step::Web)));
+        let schedule = config.schedule.clone().unwrap();
+        assert_eq!((schedule.date.as_deref(), schedule.monthly, schedule.time.as_str()), (Some("2099-01-31"), true, "09:15"));
+        assert!(describe_for_claude(&Bot { config: config.clone(), ..bot() }).contains("runs monthly on the 31st at 09:15"));
+
+        let past = apply(&Step::Schedule, card("2020-01-31", false), &mut config);
+        assert_eq!(past, Err("Pick a date and time in the future".into()));
+        assert!(apply(&Step::Schedule, card("2099-02-30", false), &mut config).is_err(), "no such date");
+
+        // Switching kinds keeps or drops the date.
+        apply(&Step::Kind, choice(ON_DATE), &mut config).unwrap();
+        assert_eq!(config.schedule.as_ref().and_then(|s| s.date.as_deref()), Some("2099-01-31"));
+        apply(&Step::Kind, choice(DAILY), &mut config).unwrap();
+        assert_eq!(config.schedule, Some(Schedule::default()));
+    }
+
+    fn bot() -> Bot {
+        serde_json::from_value(json!({
+            "id": "b", "name": "Rent Bot", "avatar": {"kind": "icon", "icon": "happy", "color": "#000"},
+            "updatedAt": 0, "preview": "", "setupState": "pending", "config": {}, "lastRunAt": null
+        }))
+        .unwrap()
+    }
+
+    #[test]
     fn chat_agent_skips_schedule() {
         let mut config = AgentConfig { schedule: Some(Schedule::default()), ..AgentConfig::default() };
         apply(&Step::Kind, choice(CHAT), &mut config).unwrap();
@@ -768,10 +920,14 @@ mod tests {
         assert!(apply(&Step::Kind, Input::Text("daily please".into()), &mut config).is_err());
         assert!(apply(&Step::Web, choice("Maybe"), &mut config).is_err());
         assert!(apply(&Step::Description, choice(YES), &mut config).is_err());
-        let bad_time = SetupAnswer::Schedule { time: "8am".into(), days: Weekday::ALL.to_vec(), notify: true };
-        assert!(apply(&Step::Schedule, Input::Card(bad_time), &mut config).is_err());
-        let no_days = SetupAnswer::Schedule { time: "08:00".into(), days: vec![], notify: true };
-        assert!(apply(&Step::Schedule, Input::Card(no_days), &mut config).is_err());
+        let schedule = |time: &str, days: Vec<Weekday>, every_minutes| {
+            Input::Card(SetupAnswer::Schedule { time: time.into(), days, every_minutes, date: None, monthly: false, notify: true })
+        };
+        assert!(apply(&Step::Schedule, schedule("8am", Weekday::ALL.to_vec(), None), &mut config).is_err());
+        assert!(apply(&Step::Schedule, schedule("08:00", vec![], None), &mut config).is_err());
+        assert!(apply(&Step::Schedule, schedule("08:00", vec![], Some(30)), &mut config).is_err());
+        assert!(apply(&Step::Schedule, schedule("08:00", Weekday::ALL.to_vec(), Some(2)), &mut config).is_err());
+        assert!(apply(&Step::Schedule, schedule("08:00", Weekday::ALL.to_vec(), Some(1441)), &mut config).is_err());
         let generating = Step::Generating { what: Generate::Questions };
         assert!(apply(&generating, Input::Text("hello?".into()), &mut config).is_err());
     }
@@ -806,7 +962,8 @@ mod tests {
         let v = json!({
             "description": "AI and chip news",
             "instructions": "  ",
-            "dailyJob": true,
+            "scheduledJob": true,
+            "everyMinutes": 0,
             "time": "7:05",
             "days": ["fri", "mon"],
             "notify": false,
@@ -825,15 +982,37 @@ mod tests {
         assert_eq!(config.workspace_folders, ["/notes", "/real"]);
         assert_eq!(note, "Moved it to 07:05.\n\nI couldn't find the folder /missing, so I left it out.");
 
-        let bad = json!({"dailyJob": true, "time": "noon", "days": ["someday"]});
+        let bad = json!({"scheduledJob": true, "time": "noon", "days": ["someday"], "everyMinutes": -5});
         let (config, note) = apply_edit(&draft, &bad, |_| false);
         assert_eq!(config, draft, "invalid values are ignored");
         assert_eq!(note, "");
-        let (config, _) = apply_edit(&draft, &json!({"dailyJob": false}), |_| false);
+        let (config, _) = apply_edit(&draft, &json!({"scheduledJob": false}), |_| false);
         assert_eq!(config.schedule, None);
         let chat = AgentConfig { description: "News".into(), ..AgentConfig::default() };
-        let (config, _) = apply_edit(&chat, &json!({"dailyJob": true}), |_| false);
-        assert_eq!(config.schedule.map(|s| s.task), Some("News".into()), "a new daily job gets a task");
+        let (config, _) = apply_edit(&chat, &json!({"scheduledJob": true}), |_| false);
+        assert_eq!(config.schedule.map(|s| s.task), Some("News".into()), "a new scheduled job gets a task");
+
+        let every = |n: i64| {
+            let (config, _) = apply_edit(&draft, &json!({"scheduledJob": true, "everyMinutes": n}), |_| false);
+            config.schedule.unwrap().every_minutes
+        };
+        assert_eq!(every(15), Some(15));
+        assert_eq!(every(1), Some(Schedule::MIN_EVERY), "clamped to the shortest interval");
+        assert_eq!(every(100_000), Some(Schedule::MAX_EVERY));
+        let interval = AgentConfig { schedule: Some(Schedule::interval()), ..draft.clone() };
+        let (config, _) = apply_edit(&interval, &json!({"scheduledJob": true, "everyMinutes": 0}), |_| false);
+        assert_eq!(config.schedule.unwrap().every_minutes, None, "0 makes it daily");
+
+        let on_date = |from: &AgentConfig, v: Value| apply_edit(from, &v, |_| false).0.schedule.unwrap();
+        let s = on_date(&interval, json!({"scheduledJob": true, "everyMinutes": 0, "date": "2099-3-1", "monthly": true}));
+        assert_eq!((s.every_minutes, s.date.as_deref(), s.monthly), (None, Some("2099-03-01"), true));
+        let dated = AgentConfig { schedule: Some(s), ..draft.clone() };
+        let s = on_date(&dated, json!({"scheduledJob": true, "everyMinutes": 0, "date": "", "monthly": true}));
+        assert_eq!((s.date, s.monthly), (None, false), "\"\" makes it daily");
+        let s = on_date(&dated, json!({"scheduledJob": true, "everyMinutes": 30, "date": "2099-03-01"}));
+        assert_eq!((s.every_minutes, s.date), (Some(30), None), "an interval has no date");
+        let s = on_date(&dated, json!({"scheduledJob": true, "date": "soon"}));
+        assert_eq!(s.date.as_deref(), Some("2099-03-01"), "a bad date is ignored");
     }
 
     #[test]

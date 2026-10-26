@@ -39,6 +39,24 @@ function Stroke({ w, h, d, color, width, round, className }: {
   );
 }
 
+/** Settings dialog: "General" tab (16px gear). */
+export const GearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden className={`shrink-0 ${className ?? ""}`}>
+    <circle cx="8" cy="8" r="2.2" stroke={color} strokeWidth="1.2" />
+    <path
+      d="M6.9 1.5h2.2l.35 1.7 1.1.62 1.65-.55 1.1 1.9-1.3 1.15v1.26l1.3 1.15-1.1 1.9-1.65-.55-1.1.62-.35 1.7H6.9l-.35-1.7-1.1-.62-1.65.55-1.1-1.9 1.3-1.15V7.37l-1.3-1.15 1.1-1.9 1.65.55 1.1-.62.35-1.7Z"
+      stroke={color}
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Settings rows: a select's chevron (8×5). */
+export const ChevronDownIcon = ({ color = "#6B6B6B", className }: IconProps) => (
+  <Stroke w={8} h={5} d="M0.5 0.5L4 4L7.5 0.5" color={color} width={1.2} round className={className} />
+);
+
 /** Sidebar "new bot" (14px). */
 export const PlusIcon = ({ color = "#6B6B6B", className }: IconProps) => (
   <Stroke w={14} h={14} d="M7 0L7 14M0 7L14 7" color={color} width={1.4} className={className} />
@@ -125,7 +143,6 @@ export const TrashIcon = ({ color = "#E5322D", className }: IconProps) => (
   />
 );
 
-/** Sidebar: the bot has a daily job (11px). */
 /** Claude-style asterisk, spun while a bot is working. */
 export const SpinnerIcon = ({ className }: { className?: string }) => (
   <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden className={className}>
@@ -137,6 +154,7 @@ export const SpinnerIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+/** Sidebar: the bot has a scheduled job (11px). */
 export const ClockIcon = ({ color = "#8F8F8C", className }: IconProps) => (
   <Stroke
     w={11}

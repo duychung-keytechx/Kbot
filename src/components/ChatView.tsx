@@ -4,6 +4,7 @@ import { useMessages } from "../lib/hooks";
 import type { Bot, Message } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { Composer } from "./Composer";
+import { secondaryButton } from "./fields";
 import { ComputerCard } from "./messages/ComputerCard";
 import { PermissionCard } from "./messages/PermissionCard";
 import {
@@ -24,6 +25,8 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   const inSetup = onboarding || bot.editing;
   // The run is paused on a question or approval card, not working.
   const waiting = messages.some((m) => m.type === "permission" && m.status === "pending");
+  // Only a task on a date gets "Run now" here; other jobs have it in Settings.
+  const isTask = !inSetup && bot.config.schedule?.date != null;
 
   // A new bot greets the user and starts asking how to set it up.
   useEffect(() => {
@@ -65,6 +68,20 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
             <p className="truncate text-[13.5px] font-medium text-ink">{bot.name}</p>
           </button>
           <div data-tauri-drag-region className="flex-1 self-stretch" />
+          {isTask && (
+            <button
+              type="button"
+              disabled={running}
+              title="Do the scheduled task now"
+              onClick={() => {
+                setError(undefined);
+                backend.runNow(bot.id).catch((e) => setError(errorText(e)));
+              }}
+              className={secondaryButton}
+            >
+              Run now
+            </button>
+          )}
         </header>
 
         <div ref={scroller} className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto px-6 pt-5 pb-4">

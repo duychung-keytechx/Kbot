@@ -11,6 +11,7 @@ pub const MESSAGE: &str = "kbot://message";
 pub const RUN: &str = "kbot://run";
 pub const CLAUDE: &str = "kbot://claude";
 pub const CLEARED: &str = "kbot://cleared";
+pub const OPEN_SETTINGS: &str = "kbot://open-settings";
 
 /// Emits a message upsert plus the refreshed bot list (preview/time changed).
 pub fn message(app: &AppHandle, bot_id: &str, message: Message) {
@@ -39,4 +40,9 @@ pub fn run(app: &AppHandle, bot_id: &str, running: bool) {
 
 pub fn claude_status(app: &AppHandle, status: &ClaudeStatus) {
     let _ = app.emit(CLAUDE, status);
+}
+
+/// Kbot > Settings… was chosen in the menu bar.
+pub fn open_settings(app: &AppHandle) {
+    let _ = app.emit(OPEN_SETTINGS, ());
 }

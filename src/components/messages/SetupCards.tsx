@@ -7,14 +7,17 @@ import { type ReactNode, useState } from "react";
 import { backend, errorText } from "../../lib/api";
 import type { AgentConfig, Message, SetupAnswer, Weekday } from "../../lib/types";
 import {
+  DatePicker,
   DayPicker,
-  describeDays,
+  describeSchedule,
   FolderList,
+  IntervalPicker,
   primaryButton,
   secondaryButton,
   textArea,
   TimeInput,
   Toggle,
+  validEvery,
 } from "../fields";
 
 type Card<T extends Message["type"]> = { botId: string; message: Extract<Message, { type: T }> };
@@ -90,31 +93,61 @@ export function SetupChoiceCard({ botId, message }: Card<"setupChoice">) {
   );
 }
 
+/** When a scheduled job runs: a time of day, an interval when `everyMinutes`
+ * is set, or a date (once or monthly) when `date` is set. */
 export function SetupScheduleCard({ botId, message }: Card<"setupSchedule">) {
   const { busy, error, answer } = useAnswer(botId, message.id);
   const [time, setTime] = useState(message.time);
   const [days, setDays] = useState<Weekday[]>(message.days);
+  const [everyMinutes, setEveryMinutes] = useState(message.everyMinutes);
+  const [date, setDate] = useState(message.date);
+  const [monthly, setMonthly] = useState(message.monthly);
   const [notify, setNotify] = useState(message.notify);
   const locked = message.submitted || busy;
-  const shown = message.submitted ? { time: message.time, days: message.days, notify: message.notify } : { time, days, notify };
+  const shown = message.submitted ? message : { time, days, everyMinutes, date, monthly, notify };
+  const interval = message.everyMinutes !== null;
+  const valid =
+    date !== null ? date !== "" : days.length > 0 && (everyMinutes === null || validEvery(everyMinutes));
+  const title = interval
+    ? "How often should I run?"
+    : message.date !== null
+      ? "When should I do it?"
+      : "When should I run each day?";
   return (
-    <CardFrame title="When should I run each day?" error={error}>
-      <div className="flex flex-wrap items-center gap-3">
-        <TimeInput value={shown.time} onChange={setTime} disabled={locked} />
-        <DayPicker days={shown.days} onChange={setDays} disabled={locked} />
-      </div>
+    <CardFrame title={title} error={error}>
+      {shown.everyMinutes !== null ? (
+        <>
+          <IntervalPicker minutes={shown.everyMinutes} onChange={setEveryMinutes} disabled={locked} />
+          <DayPicker days={shown.days} onChange={setDays} disabled={locked} />
+        </>
+      ) : shown.date !== null ? (
+        <DatePicker
+          date={shown.date}
+          monthly={shown.monthly}
+          onChange={(p) => {
+            if (p.date !== undefined) setDate(p.date);
+            if (p.monthly !== undefined) setMonthly(p.monthly);
+          }}
+          disabled={locked}
+        >
+          <TimeInput value={shown.time} onChange={setTime} disabled={locked} />
+        </DatePicker>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <TimeInput value={shown.time} onChange={setTime} disabled={locked} />
+          <DayPicker days={shown.days} onChange={setDays} disabled={locked} />
+        </div>
+      )}
       <Toggle checked={shown.notify} onChange={setNotify} disabled={locked}>
-        Notify me when it's done
+        {interval ? "Notify me after each run" : "Notify me when it's done"}
       </Toggle>
       {message.submitted ? (
-        <p className="text-[12.5px] text-hint">
-          {describeDays(message.days)} at {message.time}
-        </p>
+        <p className="text-[12.5px] text-hint">{describeSchedule(message)}</p>
       ) : (
         <button
           type="button"
-          disabled={locked || days.length === 0}
-          onClick={() => void answer({ type: "schedule", time, days, notify })}
+          disabled={locked || !valid}
+          onClick={() => void answer({ type: "schedule", time, days, everyMinutes, date, monthly, notify })}
           className={`${primaryButton} self-start`}
         >
           Continue
@@ -254,7 +287,7 @@ export function SetupCurrentCard({ config }: { config: AgentConfig }) {
       <div className="flex flex-col gap-1 border-t border-line pt-2.5 text-[13px] leading-[19px] text-ink">
         <p className="font-medium">To change anything, just tell me what you want, for example:</p>
         <ul className="list-disc pl-5 text-subtle">
-          <li>Run at 7:00 on weekdays only</li>
+          <li>Run at 7:00 on weekdays only, every 30 minutes, or on the 1st of each month</li>
           <li>Keep answers under 5 bullet points</li>
           <li>Turn off web search, and also read ~/Documents/reports</li>
         </ul>
@@ -266,7 +299,7 @@ export function SetupCurrentCard({ config }: { config: AgentConfig }) {
 
 function Summary({ config, previous }: { config: AgentConfig; previous?: AgentConfig | null }) {
   const describe = (c: AgentConfig): [string, string][] => [
-    ["Kind", c.schedule ? `Daily job, ${describeDays(c.schedule.days)} at ${c.schedule.time}` : "Chat"],
+    ["Kind", c.schedule ? `${jobKind(c.schedule)}, ${describeSchedule(c.schedule)}` : "Chat"],
     ["Notify", c.schedule ? (c.schedule.notify ? "When a run is done" : "Off") : ""],
     ["Web", c.webAccess ? "Can search the web" : "No web access"],
     ["Folders", c.workspaceFolders.length ? c.workspaceFolders.join(", ") : "None"],
@@ -287,6 +320,10 @@ function Summary({ config, previous }: { config: AgentConfig; previous?: AgentCo
       )}
     </div>
   );
+}
+
+function jobKind(s: NonNullable<AgentConfig["schedule"]>) {
+  return s.everyMinutes !== null ? "Scheduled job" : s.date !== null ? "Scheduled task" : "Daily job";
 }
 
 function Field({ label, changed, children }: { label: string; changed?: boolean; children: ReactNode }) {

@@ -1,17 +1,37 @@
-# Kbot
+<h1 align="center">Kbot</h1>
 
-A desktop app for creating and chatting with your own AI bots. Built with
-[Tauri 2](https://tauri.app) (Rust) and React, with all data stored locally in
-SQLite.
+<p align="center"><b>Don't just chat with AI. Put it to work.</b></p>
 
-| Create a bot | Chat |
+<p align="center">
+Kbot is more than a chatbot. It lets anyone build <b>personal agents</b> shaped
+around their own needs: a sales assistant that finds leads, a recruiter that
+screens candidates, a researcher that digs through the web. Each one is yours to
+name, style and put to work, right from your desktop.
+</p>
+
+| Build your agent | Put it to work |
 | --- | --- |
 | ![Create New Bot dialog](docs/screenshots/new-bot.png) | ![Chat with a bot](docs/screenshots/chat.png) |
 
 <p align="center"><img src="docs/screenshots/empty.png" alt="First launch" width="49%"></p>
 
-> The agent is still a stub (`src-tauri/src/agent.rs`): it echoes your message
-> back. Plug an LLM client in there.
+## Why Kbot
+
+- **Agents, not just answers.** A chatbot tells you what to do; a Kbot agent
+  does it. Agents are built to use tools and even take over the computer, and
+  hand control back to you whenever you want it.
+- **Built around you.** Spin up as many agents as you need, one per job, each
+  with its own name, look and conversation history.
+- **Private by default.** Kbot is a native desktop app. Your agents and
+  conversations live in a local database on your machine, not in someone
+  else's cloud.
+
+> **Status: early.** The UI, local storage and agent runtime are in place; the
+> agent itself is still a stub (`src-tauri/src/agent.rs`) that echoes your
+> message back. Plug an LLM client in there.
+
+Built with [Tauri 2](https://tauri.app) (Rust) and React, with all data stored
+locally in SQLite.
 
 ## Getting started
 

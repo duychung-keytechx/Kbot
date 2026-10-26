@@ -44,6 +44,22 @@ export function useMessages(botId: string | undefined): Message[] {
   return messages;
 }
 
+/** Whether the app window has focus. */
+export function useWindowFocused(): boolean {
+  const [focused, setFocused] = useState(() => document.hasFocus());
+  useEffect(() => {
+    const onFocus = () => setFocused(true);
+    const onBlur = () => setFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+  return focused;
+}
+
 /** Ids of bots with a reply, daily job or setup step in progress (`kbot://run`). */
 export function useRunning(): Set<string> {
   const [running, setRunning] = useState<Set<string>>(new Set());

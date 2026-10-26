@@ -24,8 +24,13 @@ pub fn message_only(app: &AppHandle, bot_id: &str, message: Message) {
     let _ = app.emit(MESSAGE, MessageEvent { bot_id: bot_id.to_string(), message });
 }
 
+/// Emits the bot list and updates the Dock badge to the number of unread bots.
 pub fn bots_changed(app: &AppHandle) {
     let bots = app.state::<AppState>().store.lock().unwrap().bots();
+    let unread = bots.iter().filter(|b| b.unread).count() as i64;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_badge_count((unread > 0).then_some(unread));
+    }
     let _ = app.emit(BOTS_CHANGED, bots);
 }
 

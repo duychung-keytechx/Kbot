@@ -149,13 +149,31 @@ test("a bot can run on an interval instead of daily", async () => {
     }, await browser.$('[data-testid="settings-panel"] select[aria-label="Unit"]'));
     await browser.$(button("Save")).click();
     await browser.$(`${sidebarRow(name)}//span[@title="Runs every 2 hours, every day"]`).waitForExist();
+
+    // A result that comes in while another chat is open is unread until the bot is opened.
+    const unread = `${sidebarRow(name)}//*[@data-testid="bot-unread"]`;
+    assert.equal(await browser.$(unread).isExisting(), false, "a result seen as it came in is read");
+    await createBot(browser, "Other Bot", "buddy", "#16B364");
+    await waitForText(browser, "Hi, I'm Other Bot!");
+    const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
+    const { id } = db.prepare("SELECT id FROM bots WHERE name = ?").get(name) as { id: string };
+    db.close();
+    await browser.execute((botId: string) => {
+      const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args: object) => Promise<unknown> } })
+        .__TAURI_INTERNALS__;
+      return internals.invoke("run_now", { botId });
+    }, id);
+    await browser.$(unread).waitForExist();
+    await browser.$(sidebarRow(name)).click();
+    await browser.$(unread).waitForExist({ reverse: true });
   } finally {
     await session.close();
   }
 
   const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
   try {
-    const row = db.prepare("SELECT config FROM bots").get() as Record<string, string>;
+    const row = db.prepare("SELECT config, unread FROM bots WHERE name = ?").get(name) as Record<string, string>;
+    assert.equal(row.unread, 0);
     const schedule = JSON.parse(row.config).schedule;
     assert.equal(schedule.everyMinutes, 120);
     assert.equal(schedule.task, "Check for new posts.");

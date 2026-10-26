@@ -20,6 +20,9 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub runs: runs::Runs,
     pub claude: claude::Claude,
+    /// The bot whose chat is on screen in the focused window, if any; its
+    /// job results aren't marked unread.
+    pub viewing: Mutex<Option<String>>,
 }
 
 const SETTINGS_MENU_ID: &str = "settings";
@@ -49,7 +52,10 @@ pub fn run() {
                 data_dir: dir,
                 runs: runs::Runs::default(),
                 claude: claude::Claude::default(),
+                viewing: Mutex::new(None),
             });
+            // Restores the Dock badge for results left unread last time.
+            events::bots_changed(app.handle());
             scheduler::start(app.handle().clone());
             // The standard macOS menu bar, plus Kbot > Settings… (⌘,).
             #[cfg(target_os = "macos")]
@@ -90,6 +96,7 @@ pub fn run() {
             commands::delete_bot,
             commands::update_bot_config,
             commands::run_now,
+            commands::set_viewing,
             commands::get_app_settings,
             commands::update_app_settings,
         ])

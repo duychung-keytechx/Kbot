@@ -78,6 +78,9 @@ pub struct Bot {
     /// A set-up bot is being changed with `/setup` (see `setup::Step::Edit`).
     #[serde(default)]
     pub editing: bool,
+    /// A scheduled job posted a result or question the user hasn't seen.
+    #[serde(default)]
+    pub unread: bool,
 }
 
 /// Whether the onboarding chat has configured this bot yet.

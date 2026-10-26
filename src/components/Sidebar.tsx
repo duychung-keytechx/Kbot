@@ -108,6 +108,12 @@ function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; bus
               </span>
             )}
             <p className="truncate text-[12.5px] text-subtle">{bot.preview || (busy ? "Working…" : "No messages yet")}</p>
+            {bot.unread && (
+              <>
+                <div className="flex-1" />
+                <span data-testid="bot-unread" title="New result" className="size-2 shrink-0 rounded-full bg-unread" />
+              </>
+            )}
           </div>
         </div>
       </button>

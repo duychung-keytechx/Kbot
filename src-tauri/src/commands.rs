@@ -49,6 +49,7 @@ pub fn create_bot(
         config: AgentConfig::default(),
         last_run_at: None,
         editing: false,
+        unread: false,
     };
     state.store.lock().unwrap().insert_bot(bot.clone())?;
     events::bots_changed(&app);
@@ -228,7 +229,12 @@ pub fn delete_bot(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
         return Err(BUSY.into());
     }
     state.store.lock().unwrap().delete_bot(&bot_id)?;
-    let _ = std::fs::remove_dir_all(agent::workdir(&app, &bot_id));
+    let workdir = agent::workdir(&app, &bot_id);
+    let _ = std::fs::remove_dir_all(&workdir);
+    // Its transcripts in Claude Code's own folder, in the background since
+    // starting the CLI takes a moment.
+    let purge_app = app.clone();
+    tauri::async_runtime::spawn(async move { claude::purge(&purge_app, &workdir).await });
     events::bots_changed(&app);
     Ok(())
 }
@@ -295,6 +301,20 @@ pub fn run_now(app: AppHandle, state: State<AppState>, bot_id: String) -> CmdRes
     let ticket = state.runs.start(&app, &bot_id).ok_or(BUSY)?;
     state.store.lock().unwrap().set_last_run_at(&bot_id, chrono::Local::now().timestamp_millis())?;
     agent::spawn(app, ticket, Trigger::Job { manual: true, late: None });
+    Ok(())
+}
+
+/// The chat on screen while the window is focused, `None` otherwise. That
+/// bot is marked read, and its job results don't mark it unread.
+#[tauri::command]
+pub fn set_viewing(app: AppHandle, state: State<AppState>, bot_id: Option<String>) -> CmdResult<()> {
+    *state.viewing.lock().unwrap() = bot_id.clone();
+    if let Some(bot_id) = bot_id {
+        let changed = state.store.lock().unwrap().set_unread(&bot_id, false)?;
+        if changed {
+            events::bots_changed(&app);
+        }
+    }
     Ok(())
 }
 

@@ -62,6 +62,7 @@ const messageListeners = new Set<(e: MessageEvent) => void>();
 const runListeners = new Set<(e: RunEvent) => void>();
 const clearedListeners = new Set<(botId: string) => void>();
 let appSettings: AppSettings = { defaultModel: DEFAULT_MODEL };
+let viewing: string | null = null;
 
 const wanted = new URLSearchParams(location.search).get("claude");
 let claude: ClaudeStatus =
@@ -409,6 +410,7 @@ export const mockBackend: Backend = {
       config: structuredClone(EMPTY_CONFIG),
       lastRunAt: null,
       editing: false,
+      unread: false,
     };
     bots.splice(bots.filter((b) => b.pinned).length, 0, b);
     conversations.set(b.id, []);
@@ -563,7 +565,18 @@ export const mockBackend: Backend = {
     const s = b.config.schedule;
     const job = s.everyMinutes !== null ? `Every ${describeEvery(s.everyMinutes)}` : s.date !== null ? "Scheduled task" : "Daily job";
     push(botId, { type: "system", text: `${job} · Run now` });
-    reply(botId, `Here's today's result for: ${b.config.schedule?.task || b.config.description} (Browser mock)`);
+    reply(botId, `Here's today's result for: ${b.config.schedule?.task || b.config.description} (Browser mock)`, () => {
+      if (viewing === botId) return;
+      b.unread = true;
+      emitBots();
+    });
+  },
+  setViewing: async (botId) => {
+    viewing = botId;
+    if (botId && bot(botId).unread) {
+      bot(botId).unread = false;
+      emitBots();
+    }
   },
   getAppSettings: async () => ({ ...appSettings }),
   updateAppSettings: async (settings) => {

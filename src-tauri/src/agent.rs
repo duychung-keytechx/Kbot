@@ -124,6 +124,7 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
             spec.session = new_session();
             continue;
         }
+        let stopped = matches!(exit, Exit::Stopped);
         match exit {
             Exit::Stopped if !reply.failed => {
                 post(app, bot_id, MessageBody::System { text: "Stopped".into() });
@@ -143,6 +144,10 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         if reply.notify && !reply.text.is_empty() {
             notify(app, &bot.name, reply.text.chars().take(180).collect());
         }
+        // A result or an error; the user knows about a run they stopped.
+        if job && !stopped {
+            mark_unread(app, bot_id);
+        }
         return Ok(());
     }
 }
@@ -153,11 +158,27 @@ fn notify(app: &AppHandle, title: &str, body: String) {
     }
 }
 
+/// Marks `bot_id` unread (sidebar dot, Dock badge) unless its chat is on screen.
+fn mark_unread(app: &AppHandle, bot_id: &str) {
+    let state = app.state::<AppState>();
+    if state.viewing.lock().unwrap().as_deref() == Some(bot_id) {
+        return;
+    }
+    let changed = state.store.lock().unwrap().set_unread(bot_id, true);
+    match changed {
+        Ok(true) => events::bots_changed(app),
+        Ok(false) => {}
+        Err(e) => eprintln!("marking {bot_id} unread failed: {e}"),
+    }
+}
+
 /// Turns stream events into chat messages for one run.
 struct Reply<'a> {
     app: &'a AppHandle,
     bot_id: &'a str,
     bot_name: &'a str,
+    /// A scheduled job, which marks the bot unread when it needs the user.
+    job: bool,
     /// A scheduled job that should notify the user (result, or waiting for an answer).
     notify: bool,
     /// Permission cards posted during this run.
@@ -181,7 +202,8 @@ impl<'a> Reply<'a> {
             app,
             bot_id: &bot.id,
             bot_name: &bot.name,
-            notify: job && bot.config.schedule.as_ref().is_some_and(|s| s.notify),
+            job,
+            notify: job &&bot.config.schedule.as_ref().is_some_and(|s| s.notify),
             asked: Vec::new(),
             current: None,
             dirty: false,
@@ -239,6 +261,9 @@ impl<'a> Reply<'a> {
             }
             Event::PermissionRequest { request_id, tool, input } => {
                 self.close();
+                if self.job {
+                    mark_unread(self.app, self.bot_id);
+                }
                 if self.notify {
                     let body = match tool.as_str() {
                         "AskUserQuestion" => "has a question for you.".to_string(),
@@ -558,6 +583,7 @@ mod tests {
             config,
             last_run_at: None,
             editing: false,
+            unread: false,
         }
     }
 

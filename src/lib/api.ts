@@ -47,6 +47,8 @@ export interface Backend {
   deleteBot(botId: string): Promise<void>;
   updateBotConfig(botId: string, config: AgentConfig): Promise<Bot>;
   runNow(botId: string): Promise<void>;
+  /** The chat on screen while the window is focused, else null; it is marked read. */
+  setViewing(botId: string | null): Promise<void>;
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(settings: AppSettings): Promise<AppSettings>;
   /** Native folder picker; null when cancelled. */
@@ -89,6 +91,7 @@ const tauriBackend: Backend = {
   deleteBot: (botId) => invoke("delete_bot", { botId }),
   updateBotConfig: (botId, config) => invoke("update_bot_config", { botId, config }),
   runNow: (botId) => invoke("run_now", { botId }),
+  setViewing: (botId) => invoke("set_viewing", { botId }),
   getAppSettings: () => invoke("get_app_settings"),
   updateAppSettings: (settings) => invoke("update_app_settings", { settings }),
   pickFolder: async () => {

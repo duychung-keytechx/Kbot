@@ -3,7 +3,7 @@
 // Run with `npm run test:e2e`.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -84,8 +84,14 @@ test("clearing a chat deletes its messages and starts a new Claude session", asy
   assert.notEqual(sessionOf(chats[0]), sessionOf(chats[1]));
 });
 
-test("deleting a chat removes the bot and opens another one", async () => {
-  const session = await launch(dataDir);
+test("deleting a chat removes the bot, its Claude Code state, and opens another one", async () => {
+  const log = join(dataDir, "claude-calls.jsonl");
+  const purges = () =>
+    (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [])
+      .map((l) => JSON.parse(l) as string[])
+      .filter((a) => a[0] === "purge");
+  let deletedId = "";
+  const session = await launch(dataDir, { FAKE_CLAUDE_LOG: log });
   try {
     const { browser } = session;
     await createBot(browser, "Keep Bot", "buddy", "#16B364");
@@ -97,12 +103,22 @@ test("deleting a chat removes the bot and opens another one", async () => {
     await browser.$('//*[@role="alertdialog"]//button[normalize-space()="Cancel"]').click();
     await browser.$(sidebarRow("Delete Bot")).waitForDisplayed();
 
+    await browser.$(button("Skip setup")).click();
+    await send(browser, "Delete Bot", "hello there");
+    await waitForText(browser, "Fake reply to: hello there");
+    const db = new DatabaseSync(join(dataDir, "kbot.db"), { readOnly: true });
+    deletedId = (db.prepare("SELECT id FROM bots WHERE name = 'Delete Bot'").get() as { id: string }).id;
+    db.close();
+    assert.ok(existsSync(join(dataDir, "agents", deletedId)));
+
     await contextMenu(browser, "Delete Bot", "Delete Chat");
     await waitForText(browser, "Delete Delete Bot with its messages and settings?");
     await browser.$('//*[@role="alertdialog"]//button[normalize-space()="Delete"]').click();
     await browser.$(sidebarRow("Delete Bot")).waitForExist({ reverse: true });
     await browser.$(`${sidebarRow("Keep Bot")}[@aria-current="true"]`).waitForExist();
     await waitForText(browser, "Hi, I'm Keep Bot!");
+    // The purge runs in the background.
+    await browser.waitUntil(() => purges().length > 0, { timeoutMsg: "claude purge was not run" });
   } finally {
     await session.close();
   }
@@ -114,4 +130,6 @@ test("deleting a chat removes the bot and opens another one", async () => {
   } finally {
     db.close();
   }
+  assert.ok(!existsSync(join(dataDir, "agents", deletedId)));
+  assert.deepEqual(purges(), [["purge", "--yes", join(dataDir, "agents", deletedId)]]);
 });

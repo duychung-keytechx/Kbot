@@ -150,6 +150,35 @@ fn command(bin: &Path) -> Command {
     cmd
 }
 
+/// Deletes Claude Code's state for the project at `cwd` (its transcripts,
+/// file history and config entry) with `claude purge`. Works after `cwd` is
+/// gone. Best effort: failures are only logged.
+pub async fn purge(app: &AppHandle, cwd: &Path) {
+    let state = app.state::<AppState>();
+    let bin = match state.claude.binary() {
+        Some(bin) => Some(bin),
+        None => {
+            let configured = state.store.lock().unwrap().app_setting("claude_path");
+            tauri::async_runtime::spawn_blocking(move || find_binary(configured)).await.ok().flatten()
+        }
+    };
+    let Some(bin) = bin else { return };
+    let mut cmd = command(&bin);
+    cmd.arg("purge").arg("--yes").arg(cwd);
+    match tokio::time::timeout(Duration::from_secs(30), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => {}
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // Exits 1 when Claude Code never ran there.
+            if !stderr.contains("No Claude Code project state found") {
+                eprintln!("claude purge {} failed: {}", cwd.display(), stderr.trim());
+            }
+        }
+        Ok(Err(e)) => eprintln!("claude purge {} failed: {e}", cwd.display()),
+        Err(_) => eprintln!("claude purge {} timed out", cwd.display()),
+    }
+}
+
 impl Claude {
     pub fn binary(&self) -> Option<PathBuf> {
         self.bin.lock().unwrap().clone()

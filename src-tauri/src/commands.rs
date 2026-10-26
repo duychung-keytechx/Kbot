@@ -228,7 +228,12 @@ pub fn delete_bot(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
         return Err(BUSY.into());
     }
     state.store.lock().unwrap().delete_bot(&bot_id)?;
-    let _ = std::fs::remove_dir_all(agent::workdir(&app, &bot_id));
+    let workdir = agent::workdir(&app, &bot_id);
+    let _ = std::fs::remove_dir_all(&workdir);
+    // Its transcripts in Claude Code's own folder, in the background since
+    // starting the CLI takes a moment.
+    let purge_app = app.clone();
+    tauri::async_runtime::spawn(async move { claude::purge(&purge_app, &workdir).await });
     events::bots_changed(&app);
     Ok(())
 }

@@ -4,6 +4,7 @@
 //
 // - `auth status --json`: signed in with a subscription, or signed out when
 //   FAKE_CLAUDE_STATE=loggedOut.
+// - `purge --yes <path>`: does nothing and succeeds.
 // - `-p ... --json-schema <schema>`: onboarding helpers; one clarifying
 //   question, then instructions built from the prompt. A `/setup` change
 //   appends the request to the instructions and takes any "HH:MM" as the time.
@@ -45,6 +46,8 @@ if (args[0] === "auth" && args[1] === "status") {
   });
   process.exit(0);
 }
+
+if (args[0] === "purge") process.exit(0);
 
 if (args[0] !== "-p") {
   process.stderr.write(`fake-claude: unsupported arguments ${args.join(" ")}\n`);

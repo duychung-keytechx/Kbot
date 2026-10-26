@@ -1,4 +1,4 @@
-<h1 align="center">Kbot</h1>
+<h1 align="center"><img src="icon.png" alt="Kbot" width="220"></h1>
 
 <p align="center"><b>Don't just chat with AI. Put it to work.</b></p>
 
@@ -93,6 +93,7 @@ src-tauri/
   src/scheduler.rs       daily jobs
   src/runs.rs            one run per bot at a time, cancellation
 e2e/                     end-to-end tests, fake `claude` CLI, screenshot script
+icon.png                 the logo; app icons in src-tauri/icons/ are generated from it
 docs/screenshots/        README images
 ```
 
@@ -131,7 +132,7 @@ throwaway data directory (`KBOT_DATA_DIR`, deleted afterwards), so they never
 touch your real agents; an e2e build refuses to start without it. Claude Code is replaced by `e2e/fake-claude.ts` (through
 `KBOT_CLAUDE_BIN`), so the tests need no account and use no quota. That feature
 is never enabled in normal builds. If the app
-is already built, run just the tests with `node --test "e2e/**/*.test.ts"`.
+is already built, run just the tests with `node --test --test-concurrency=1 "e2e/**/*.test.ts"`.
 
 To regenerate the screenshots above: `npm run screenshots`.
 

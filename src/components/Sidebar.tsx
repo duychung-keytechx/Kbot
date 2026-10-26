@@ -1,4 +1,6 @@
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import mark from "../assets/kbot-mark.png";
+import wordmark from "../assets/kbot-wordmark.png";
 import { backend } from "../lib/api";
 import { formatListTime } from "../lib/format";
 import type { Bot } from "../lib/types";
@@ -29,9 +31,11 @@ export function Sidebar({
     <aside className="flex w-[290px] shrink-0 flex-col gap-3 border-r border-sidebar-line bg-sidebar pt-4 pr-3.5 pb-3.5 pl-3.5">
       <div data-tauri-drag-region className="flex items-center gap-2 px-1">
         <WindowControls />
-        <p data-tauri-drag-region className="text-[13px] font-semibold text-placeholder">
-          Kbot
-        </p>
+        {/* Ignores the pointer so the title bar stays draggable. */}
+        <div className="pointer-events-none ml-1 flex items-center gap-1">
+          <img src={mark} alt="" draggable={false} className="h-[17px] w-auto" />
+          <img src={wordmark} alt="Kbot" draggable={false} className="h-[13px] w-auto" />
+        </div>
         <div data-tauri-drag-region className="h-2.5 flex-1" />
         <button type="button" aria-label="New bot" title="New bot" onClick={onNewBot} className="flex shrink-0">
           <PlusIcon />

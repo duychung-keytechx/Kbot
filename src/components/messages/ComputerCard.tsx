@@ -24,7 +24,7 @@ export function ComputerCard({
             You're in control
           </ControlPill>
         ) : (
-          <ControlPill dot="#8A8A88" bg="#E6E6E4" ink="#6E6E6B">
+          <ControlPill dot="var(--color-hint)" bg="var(--color-disabled)" ink="var(--color-subtle)">
             Agent is in control
           </ControlPill>
         )}
@@ -38,7 +38,7 @@ export function ComputerCard({
         <button
           type="button"
           onClick={() => onControl("user")}
-          className="rounded-[15px] bg-ink-strong px-[13px] py-1.5 text-[13px] font-medium text-white"
+          className="rounded-[15px] bg-ink-strong px-[13px] py-1.5 text-[13px] font-medium text-ink-inverse"
         >
           Take over
         </button>
@@ -46,7 +46,7 @@ export function ComputerCard({
           <button
             type="button"
             onClick={() => onControl("agent")}
-            className="rounded-[15px] border border-button-line bg-white px-[13px] py-1.5 text-[13px] font-medium text-ink"
+            className="rounded-[15px] border border-button-line bg-surface px-[13px] py-1.5 text-[13px] font-medium text-ink"
           >
             I'm done
           </button>

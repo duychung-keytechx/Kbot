@@ -1,5 +1,6 @@
 mod agent;
 mod claude;
+mod codex;
 mod commands;
 mod events;
 mod migrate;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub runs: runs::Runs,
     pub claude: claude::Claude,
+    pub codex: codex::Codex,
     /// The bot whose chat is on screen in the focused window, if any; its
     /// job results aren't marked unread.
     pub viewing: Mutex<Option<String>>,
@@ -52,6 +54,7 @@ pub fn run() {
                 data_dir: dir,
                 runs: runs::Runs::default(),
                 claude: claude::Claude::default(),
+                codex: codex::Codex::default(),
                 viewing: Mutex::new(None),
             });
             // Restores the Dock badge for results left unread last time.
@@ -84,6 +87,8 @@ pub fn run() {
             commands::set_computer_control,
             commands::answer_permission,
             commands::claude_status,
+            commands::codex_status,
+            commands::codex_models,
             commands::running_bots,
             commands::cancel_run,
             commands::ensure_setup,

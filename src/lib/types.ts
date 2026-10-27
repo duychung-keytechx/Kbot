@@ -115,6 +115,8 @@ export interface AgentConfig {
   webAccess: boolean;
   /** Claude Code `--model`; null = `AppSettings.defaultModel`. */
   model: string | null;
+  /** Codex `--model`; null = `AppSettings.codexModel`. */
+  codexModel: string | null;
 }
 
 /** Mirrors `Bot::MAX_NAME`. */
@@ -123,11 +125,30 @@ export const MAX_NAME = 60;
 /** Claude Code `--model` for bots that don't pick their own. */
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
 
+/** The coding agent CLI bots run on. */
+export type Provider = "claude" | "codex";
+/** How long the model thinks before acting. */
+export type Effort = "low" | "medium" | "high";
+export type Theme = "light" | "dark";
+
 /** App-wide preferences, edited in Kbot > Settings…. */
 export interface AppSettings {
+  provider: Provider;
   /** Claude Code `--model` for bots whose `AgentConfig.model` is null. */
   defaultModel: string;
+  /** Codex `--model` for bots whose `AgentConfig.codexModel` is null; null = the Codex config's model. */
+  codexModel: string | null;
+  effort: Effort;
+  theme: Theme;
 }
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  provider: "claude",
+  defaultModel: DEFAULT_MODEL,
+  codexModel: null,
+  effort: "medium",
+  theme: "light",
+};
 
 export const DEFAULT_SCHEDULE: Schedule = {
   time: "08:00",
@@ -165,6 +186,7 @@ export const EMPTY_CONFIG: AgentConfig = {
   workspaceFolders: [],
   webAccess: false,
   model: null,
+  codexModel: null,
 };
 
 export type Control = "user" | "agent";
@@ -251,6 +273,15 @@ export type SetupAnswer =
 export interface RunEvent {
   botId: string;
   running: boolean;
+}
+
+/** Mirrors `codex::CodexStatus`. `account`: "ChatGPT", "an API key" or a model provider's name. */
+export type CodexStatus = { state: "notInstalled" } | { state: "loggedOut" } | { state: "ready"; account: string };
+
+/** Mirrors `codex::CodexModels`; `configured` is the model in the user's Codex config. */
+export interface CodexModels {
+  configured: string | null;
+  models: { id: string; description: string }[];
 }
 
 /** Mirrors `claude::ClaudeStatus`. */

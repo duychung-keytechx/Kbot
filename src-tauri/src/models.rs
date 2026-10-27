@@ -138,17 +138,91 @@ pub struct AgentConfig {
     pub web_access: bool,
     /// Claude Code `--model` value (e.g. "sonnet"); `None` = `AppSettings::default_model`.
     pub model: Option<String>,
+    /// Codex `--model` value; `None` = `AppSettings::codex_model`.
+    pub codex_model: Option<String>,
 }
 
 /// Claude Code `--model` for bots that don't pick their own.
 pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
 
+/// The coding agent CLI that bots run on.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Provider {
+    /// The model's name in chat messages ("Claude couldn't finish").
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Claude => "Claude",
+            Provider::Codex => "Codex",
+        }
+    }
+
+    /// The CLI's name in chat messages ("Claude Code stopped unexpectedly").
+    pub fn cli(self) -> &'static str {
+        match self {
+            Provider::Claude => "Claude Code",
+            Provider::Codex => "Codex",
+        }
+    }
+}
+
+/// How long the model thinks before acting: Claude Code `--effort`, Codex `model_reasoning_effort`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl Effort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Light,
+    Dark,
+}
+
 /// App-wide preferences, edited in Kbot > Settings…. Stored as rows of `app_settings`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    pub provider: Provider,
     /// Claude Code `--model` for bots whose `AgentConfig::model` is `None`.
     pub default_model: String,
+    /// Codex `--model` for bots whose `AgentConfig::codex_model` is `None`;
+    /// `None` = the model in the user's Codex config.
+    pub codex_model: Option<String>,
+    pub effort: Effort,
+    pub theme: Theme,
+}
+
+impl AppSettings {
+    /// The model a bot runs with on the current provider: its own, else the
+    /// default; `None` lets Codex use its configured model.
+    pub fn model_for(&self, config: &AgentConfig) -> Option<String> {
+        match self.provider {
+            Provider::Claude => Some(config.model.clone().unwrap_or_else(|| self.default_model.clone())),
+            Provider::Codex => config.codex_model.clone().or_else(|| self.codex_model.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

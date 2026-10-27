@@ -40,7 +40,7 @@ function Stroke({ w, h, d, color, width, round, className }: {
 }
 
 /** Settings dialog: "General" tab (16px gear). */
-export const GearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+export const GearIcon = ({ color = "var(--color-ink)", className }: IconProps) => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden className={`shrink-0 ${className ?? ""}`}>
     <circle cx="8" cy="8" r="2.2" stroke={color} strokeWidth="1.2" />
     <path
@@ -53,21 +53,21 @@ export const GearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
 );
 
 /** Settings rows: a select's chevron (8×5). */
-export const ChevronDownIcon = ({ color = "#6B6B6B", className }: IconProps) => (
+export const ChevronDownIcon = ({ color = "var(--color-icon)", className }: IconProps) => (
   <Stroke w={8} h={5} d="M0.5 0.5L4 4L7.5 0.5" color={color} width={1.2} round className={className} />
 );
 
 /** Sidebar "new bot" (14px). */
-export const PlusIcon = ({ color = "#6B6B6B", className }: IconProps) => (
+export const PlusIcon = ({ color = "var(--color-icon)", className }: IconProps) => (
   <Stroke w={14} h={14} d="M7 0L7 14M0 7L14 7" color={color} width={1.4} className={className} />
 );
 
 /** Composer "add" (12px). */
-export const SmallPlusIcon = ({ color = "#6B6B6B", className }: IconProps) => (
+export const SmallPlusIcon = ({ color = "var(--color-icon)", className }: IconProps) => (
   <Stroke w={12} h={12} d="M6 0L6 12M0 6L12 6" color={color} width={1.4} className={className} />
 );
 
-export const SearchIcon = ({ color = "#8A8A88", className }: IconProps) => (
+export const SearchIcon = ({ color = "var(--color-hint)", className }: IconProps) => (
   <Stroke
     w={14}
     h={14}
@@ -78,7 +78,7 @@ export const SearchIcon = ({ color = "#8A8A88", className }: IconProps) => (
   />
 );
 
-export const MicIcon = ({ color = "#FFFFFF", className }: IconProps) => (
+export const MicIcon = ({ color = "var(--color-ink-inverse)", className }: IconProps) => (
   <Stroke
     w={13}
     h={14}
@@ -90,22 +90,22 @@ export const MicIcon = ({ color = "#FFFFFF", className }: IconProps) => (
 );
 
 /** Not in the mock: replaces the mic once there is text to send. */
-export const SendIcon = ({ color = "#FFFFFF", className }: IconProps) => (
+export const SendIcon = ({ color = "var(--color-ink-inverse)", className }: IconProps) => (
   <Stroke w={12} h={14} d="M6 13L6 1M1 6L6 1L11 6" color={color} width={1.6} round className={className} />
 );
 
 /** Dialog close (12px). */
-export const CloseIcon = ({ color = "#6B6B6B", className }: IconProps) => (
+export const CloseIcon = ({ color = "var(--color-icon)", className }: IconProps) => (
   <Stroke w={12} h={12} d="M0 0L12 12M12 0L0 12" color={color} width={1.5} round className={className} />
 );
 
 /** Composer "stop" while the bot is replying (10px filled square). */
-export const StopIcon = ({ color = "#FFFFFF", className }: IconProps) => (
+export const StopIcon = ({ color = "var(--color-ink-inverse)", className }: IconProps) => (
   <span className={`block size-[10px] shrink-0 rounded-[2px] ${className ?? ""}`} style={{ background: color }} />
 );
 
 /** Sidebar context menu: "Edit" (14px pencil). */
-export const EditIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+export const EditIcon = ({ color = "var(--color-ink)", className }: IconProps) => (
   <Stroke
     w={14}
     h={14}
@@ -118,7 +118,7 @@ export const EditIcon = ({ color = "#1F1F1F", className }: IconProps) => (
 );
 
 /** Sidebar context menu: "Clear History" (14px circled ×). */
-export const ClearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
+export const ClearIcon = ({ color = "var(--color-ink)", className }: IconProps) => (
   <Stroke
     w={14}
     h={14}
@@ -131,7 +131,7 @@ export const ClearIcon = ({ color = "#1F1F1F", className }: IconProps) => (
 );
 
 /** Sidebar context menu: "Delete Chat" (13×14 trash can). */
-export const TrashIcon = ({ color = "#E5322D", className }: IconProps) => (
+export const TrashIcon = ({ color = "var(--color-danger)", className }: IconProps) => (
   <Stroke
     w={13}
     h={14}
@@ -155,7 +155,7 @@ export const SpinnerIcon = ({ className }: { className?: string }) => (
 );
 
 /** Sidebar: the bot has a scheduled job (11px). */
-export const ClockIcon = ({ color = "#8F8F8C", className }: IconProps) => (
+export const ClockIcon = ({ color = "var(--color-muted)", className }: IconProps) => (
   <Stroke
     w={11}
     h={11}
@@ -165,4 +165,33 @@ export const ClockIcon = ({ color = "#8F8F8C", className }: IconProps) => (
     round
     className={className}
   />
+);
+
+/** Settings > General. */
+export const CircleIcon = ({ color = "currentColor", className }: IconProps) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden className={`shrink-0 ${className ?? ""}`}>
+    <circle cx="7" cy="7" r="6.25" stroke={color} strokeWidth="1.5" />
+  </svg>
+);
+
+/** Settings > AI Providers. */
+export const SparkleIcon = ({ color = "currentColor", className }: IconProps) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden className={`shrink-0 ${className ?? ""}`}>
+    <path d="M7 0L8.6 5.4L14 7L8.6 8.6L7 14L5.4 8.6L0 7L5.4 5.4Z" stroke={color} strokeWidth="1.3" strokeLinejoin="round" />
+  </svg>
+);
+
+export const SunIcon = ({ color = "currentColor", className }: IconProps) => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden className={`shrink-0 ${className ?? ""}`}>
+    <g stroke={color} strokeWidth="1.2">
+      <circle cx="6" cy="6" r="2.5" />
+      <path d="M6 0V1.4M6 10.6V12M0 6H1.4M10.6 6H12M1.8 1.8L2.8 2.8M9.2 9.2L10.2 10.2M1.8 10.2L2.8 9.2M9.2 2.8L10.2 1.8" />
+    </g>
+  </svg>
+);
+
+export const MoonIcon = ({ color = "currentColor", className }: IconProps) => (
+  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden className={`shrink-0 ${className ?? ""}`}>
+    <path d="M8 .8A5.4 5.4 0 1 0 11.2 8A4.3 4.3 0 0 1 8 .8Z" stroke={color} strokeWidth="1.2" strokeLinejoin="round" />
+  </svg>
 );

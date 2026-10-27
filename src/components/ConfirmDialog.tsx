@@ -44,13 +44,13 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-title"
         onMouseDown={(e) => e.stopPropagation()}
-        className="flex w-[340px] flex-col gap-2 rounded-2xl border border-modal-line bg-white p-5 shadow-[0_20px_50px_rgba(0,0,0,0.2),0_2px_6px_rgba(0,0,0,0.06)]"
+        className="flex w-[340px] flex-col gap-2 rounded-2xl border border-modal-line bg-surface p-5 shadow-[0_20px_50px_rgba(0,0,0,0.2),0_2px_6px_rgba(0,0,0,0.06)]"
       >
         <p id="confirm-title" className="text-[15px] font-semibold text-ink">
           {title}
         </p>
         <p className="text-[13.5px] leading-[20px] text-subtle">{message}</p>
-        {error && <p className="text-[12.5px] leading-[18px] text-[#c4321c]">{error}</p>}
+        {error && <p className="text-[12.5px] leading-[18px] text-danger">{error}</p>}
         <div className="mt-2 flex justify-end gap-2">
           <button type="button" onClick={onClose} className={secondaryButton}>
             Cancel
@@ -60,7 +60,7 @@ export function ConfirmDialog({
             autoFocus
             disabled={busy}
             onClick={() => void confirm()}
-            className="rounded-[15px] bg-[#c4321c] px-[13px] py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
+            className="rounded-[15px] bg-danger px-[13px] py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
           >
             {confirmLabel}
           </button>

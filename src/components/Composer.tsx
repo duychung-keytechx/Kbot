@@ -27,7 +27,7 @@ export function Composer({
   return (
     <div className="flex flex-col self-stretch px-5 pt-2 pb-[18px]">
       <form
-        className="flex items-center gap-2.5 self-stretch rounded-[23px] border border-composer-line bg-white py-1.5 pr-1.5 pl-2 shadow-[0_2px_6px_rgba(0,0,0,0.05)]"
+        className="flex items-center gap-2.5 self-stretch rounded-[23px] border border-composer-line bg-surface py-1.5 pr-1.5 pl-2 shadow-[0_2px_6px_rgba(0,0,0,0.05)]"
         onSubmit={(e) => {
           e.preventDefault();
           void send();

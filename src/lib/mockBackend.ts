@@ -1,7 +1,8 @@
 // Browser-only stand-in for the Rust backend (see api.ts). Mirrors the
 // behaviour of src-tauri/src/{store,commands,agent,setup}.rs closely enough
 // for UI work. `?claude=loggedOut` (or notInstalled / notSubscription) shows
-// the Connect Claude screen.
+// the Connect Claude screen, `?codex=loggedOut` (or notInstalled) the Connect
+// Codex one once Codex is picked in Settings.
 
 import type { Backend } from "./api";
 import {
@@ -9,8 +10,10 @@ import {
   type AppSettings,
   type Bot,
   type ClaudeStatus,
+  type CodexModels,
+  type CodexStatus,
   dateSchedule,
-  DEFAULT_MODEL,
+  DEFAULT_APP_SETTINGS,
   DEFAULT_SCHEDULE,
   EMPTY_CONFIG,
   INTERVAL_SCHEDULE,
@@ -62,7 +65,8 @@ const botListeners = new Set<(bots: Bot[]) => void>();
 const messageListeners = new Set<(e: MessageEvent) => void>();
 const runListeners = new Set<(e: RunEvent) => void>();
 const clearedListeners = new Set<(botId: string) => void>();
-let appSettings: AppSettings = { defaultModel: DEFAULT_MODEL };
+const settingsListeners = new Set<(settings: AppSettings) => void>();
+let appSettings: AppSettings = { ...DEFAULT_APP_SETTINGS };
 let viewing: string | null = null;
 
 const wanted = new URLSearchParams(location.search).get("claude");
@@ -72,6 +76,19 @@ let claude: ClaudeStatus =
     : wanted === "notSubscription"
       ? { state: "notSubscription", authMethod: "api_key" }
       : { state: "ready", subscription: "max", email: "you@example.com" };
+
+const wantedCodex = new URLSearchParams(location.search).get("codex");
+const codexReady: CodexStatus = { state: "ready", account: "oMLX" };
+let codex: CodexStatus = wantedCodex === "notInstalled" || wantedCodex === "loggedOut" ? { state: wantedCodex } : codexReady;
+const CODEX_MODELS: CodexModels = {
+  configured: "Qwen3.8-27B-MLX-4bit",
+  models: [
+    { id: "gpt-5.2-codex", description: "Tuned for agentic work and tool use" },
+    { id: "gpt-5.2", description: "General reasoning, research and writing" },
+    { id: "gpt-5.1-codex-max", description: "Long, multi-step tasks. Slower" },
+    { id: "gpt-5.1-codex-mini", description: "Faster and cheaper, for light tasks" },
+  ],
+};
 
 const bot = (botId: string) => {
   const b = bots.find((b) => b.id === botId);
@@ -458,13 +475,18 @@ export const mockBackend: Backend = {
     if (control === "agent") reply(botId, "Thanks, I've got it from here. Looking through your accounts now.");
     return { ...message };
   },
-  claudeStatus: async () => {
+  claudeStatus: async (refresh) => {
     await new Promise((r) => setTimeout(r, 300));
     // "Check again" pretends the user signed in meanwhile.
-    const status = claude;
-    claude = { state: "ready", subscription: "max", email: "you@example.com" };
-    return status;
+    if (refresh) claude = { state: "ready", subscription: "max", email: "you@example.com" };
+    return claude;
   },
+  codexStatus: async (refresh) => {
+    await new Promise((r) => setTimeout(r, 300));
+    if (refresh) codex = codexReady;
+    return codex;
+  },
+  codexModels: async () => structuredClone(CODEX_MODELS),
   runningBots: async () => [...running.keys()],
   cancelRun: async (botId) => {
     running.get(botId)?.();
@@ -591,7 +613,9 @@ export const mockBackend: Backend = {
   updateAppSettings: async (settings) => {
     const defaultModel = settings.defaultModel.trim();
     if (!defaultModel) throw new Error("Choose a model");
-    appSettings = { defaultModel };
+    const codexModel = settings.codexModel?.trim() || null;
+    appSettings = { ...settings, defaultModel, codexModel };
+    settingsListeners.forEach((cb) => cb({ ...appSettings }));
     return { ...appSettings };
   },
   pickFolder: async () => prompt("Folder path (browser mock)") || null,
@@ -612,5 +636,10 @@ export const mockBackend: Backend = {
     return () => runListeners.delete(cb);
   },
   onClaudeStatus: () => () => {},
+  onCodexStatus: () => () => {},
+  onAppSettings: (cb) => {
+    settingsListeners.add(cb);
+    return () => settingsListeners.delete(cb);
+  },
   onOpenSettings: () => () => {},
 };

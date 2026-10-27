@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { backend, errorText } from "../lib/api";
+import { useAppSettings } from "../lib/hooks";
 import { type AgentConfig, type Bot, dateSchedule, DEFAULT_EVERY, DEFAULT_SCHEDULE, type Schedule } from "../lib/types";
 import {
   DatePicker,
@@ -31,6 +32,7 @@ const switchTo = (kind: (typeof KINDS)[number]): Partial<Schedule> =>
 /** Edits a bot's `AgentConfig`; opened by clicking the chat header. */
 export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: boolean; onClose: () => void }) {
   const [draft, setDraft] = useState<AgentConfig>(bot.config);
+  const codex = useAppSettings()?.provider === "codex";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const dirty = JSON.stringify(draft) !== JSON.stringify(bot.config);
@@ -86,7 +88,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
             className={textArea}
           />
         </Section>
-        <Section label="Instructions" hint="What the agent follows. Changing it starts a new conversation with Claude.">
+        <Section label="Instructions" hint="What the agent follows. Changing it starts a new conversation.">
           <textarea
             rows={7}
             value={draft.instructions}
@@ -114,7 +116,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
                       aria-pressed={on}
                       onClick={() => !on && setSchedule(switchTo(kind))}
                       className={`h-7 rounded-full px-3 text-[12.5px] font-medium ${
-                        on ? "bg-ink-strong text-white" : "border border-button-line bg-white text-subtle"
+                        on ? "bg-ink-strong text-ink-inverse" : "border border-button-line bg-surface text-subtle"
                       }`}
                     >
                       {kind}
@@ -168,17 +170,29 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
           <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
         </Section>
 
-        <Section label="Model" hint="A Claude Code model name, like sonnet or opus. Empty uses the default model from Kbot Settings.">
-          <input
-            value={draft.model ?? ""}
-            placeholder="Default"
-            spellCheck={false}
-            onChange={(e) => set({ model: e.target.value || null })}
-            className="rounded-[8px] border border-field-line bg-white px-2.5 py-1.5 text-[13.5px] text-ink"
-          />
-        </Section>
+        {codex ? (
+          <Section label="Codex model" hint="A Codex model name, like gpt-5.2-codex. Empty uses the Codex model from Kbot Settings.">
+            <input
+              value={draft.codexModel ?? ""}
+              placeholder="Default"
+              spellCheck={false}
+              onChange={(e) => set({ codexModel: e.target.value || null })}
+              className="rounded-[8px] border border-field-line bg-surface px-2.5 py-1.5 text-[13.5px] text-ink"
+            />
+          </Section>
+        ) : (
+          <Section label="Claude model" hint="A Claude Code model name, like sonnet or opus. Empty uses the Claude model from Kbot Settings.">
+            <input
+              value={draft.model ?? ""}
+              placeholder="Default"
+              spellCheck={false}
+              onChange={(e) => set({ model: e.target.value || null })}
+              className="rounded-[8px] border border-field-line bg-surface px-2.5 py-1.5 text-[13.5px] text-ink"
+            />
+          </Section>
+        )}
 
-        {error && <p className="text-[12.5px] text-[#c4321c]">{error}</p>}
+        {error && <p className="text-[12.5px] text-danger">{error}</p>}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">

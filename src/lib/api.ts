@@ -14,6 +14,8 @@ import type {
   Bot,
   BotImage,
   ClaudeStatus,
+  CodexModels,
+  CodexStatus,
   Control,
   Message,
   MessageEvent,
@@ -31,6 +33,9 @@ export interface Backend {
   answerPermission(botId: string, messageId: string, answer: PermissionAnswer): Promise<Message>;
   /** `refresh` skips the 10-minute cache ("Check again"). */
   claudeStatus(refresh: boolean): Promise<ClaudeStatus>;
+  /** Like `claudeStatus`, for the Codex CLI. */
+  codexStatus(refresh: boolean): Promise<CodexStatus>;
+  codexModels(): Promise<CodexModels>;
   runningBots(): Promise<string[]>;
   cancelRun(botId: string): Promise<boolean>;
   ensureSetup(botId: string): Promise<void>;
@@ -58,6 +63,9 @@ export interface Backend {
   onCleared(cb: (botId: string) => void): () => void;
   onRun(cb: (e: RunEvent) => void): () => void;
   onClaudeStatus(cb: (status: ClaudeStatus) => void): () => void;
+  onCodexStatus(cb: (status: CodexStatus) => void): () => void;
+  /** Kbot > Settings… were saved (`kbot://settings`). */
+  onAppSettings(cb: (settings: AppSettings) => void): () => void;
   /** Kbot > Settings… in the macOS menu bar (`kbot://open-settings`). */
   onOpenSettings(cb: () => void): () => void;
 }
@@ -78,6 +86,8 @@ const tauriBackend: Backend = {
     invoke("set_computer_control", { botId, messageId, control }),
   answerPermission: (botId, messageId, answer) => invoke("answer_permission", { botId, messageId, answer }),
   claudeStatus: (refresh) => invoke("claude_status", { refresh }),
+  codexStatus: (refresh) => invoke("codex_status", { refresh }),
+  codexModels: () => invoke("codex_models"),
   runningBots: () => invoke("running_bots"),
   cancelRun: (botId) => invoke("cancel_run", { botId }),
   ensureSetup: (botId) => invoke("ensure_setup", { botId }),
@@ -102,6 +112,8 @@ const tauriBackend: Backend = {
   onCleared: (cb) => subscribe("kbot://cleared", cb),
   onRun: (cb) => subscribe("kbot://run", cb),
   onClaudeStatus: (cb) => subscribe("kbot://claude", cb),
+  onCodexStatus: (cb) => subscribe("kbot://codex", cb),
+  onAppSettings: (cb) => subscribe("kbot://settings", cb),
   onOpenSettings: (cb) => subscribe("kbot://open-settings", cb),
 };
 

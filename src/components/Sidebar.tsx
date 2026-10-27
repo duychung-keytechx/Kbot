@@ -52,7 +52,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <label className="flex items-center gap-2 rounded-lg border border-field-line bg-white px-2.5 py-[7px]">
+      <label className="flex items-center gap-2 rounded-lg border border-field-line bg-surface px-2.5 py-[7px]">
         <SearchIcon />
         <input
           value={query}
@@ -291,7 +291,7 @@ function ContextMenu({
       aria-label={label}
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
-      className="fixed z-40 flex w-[200px] flex-col rounded-[10px] border border-modal-line bg-white/95 p-1 shadow-[0_8px_28px_rgb(0_0_0/0.14)] backdrop-blur"
+      className="fixed z-40 flex w-[200px] flex-col rounded-[10px] border border-modal-line bg-surface/95 p-1 shadow-[0_8px_28px_rgb(0_0_0/0.14)] backdrop-blur"
     >
       {items.map((item, i) => (
         <Fragment key={item.label}>
@@ -307,7 +307,7 @@ function ContextMenu({
               item.onSelect();
             }}
             className={`flex items-center gap-2.5 rounded-[7px] px-2.5 py-[7px] text-left text-[13.5px] outline-none enabled:hover:bg-row-hover focus-visible:bg-row-hover disabled:opacity-40 ${
-              item.danger ? "text-[#e5322d]" : "text-ink"
+              item.danger ? "text-danger" : "text-ink"
             }`}
           >
             <span className="flex w-4 justify-center">{item.icon}</span>

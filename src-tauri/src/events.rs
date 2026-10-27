@@ -3,13 +3,16 @@
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::claude::ClaudeStatus;
-use crate::models::{Message, MessageEvent, RunEvent};
+use crate::codex::CodexStatus;
+use crate::models::{AppSettings, Message, MessageEvent, RunEvent};
 use crate::AppState;
 
 pub const BOTS_CHANGED: &str = "kbot://bots";
 pub const MESSAGE: &str = "kbot://message";
 pub const RUN: &str = "kbot://run";
 pub const CLAUDE: &str = "kbot://claude";
+pub const CODEX: &str = "kbot://codex";
+pub const SETTINGS: &str = "kbot://settings";
 pub const CLEARED: &str = "kbot://cleared";
 pub const OPEN_SETTINGS: &str = "kbot://open-settings";
 
@@ -45,6 +48,15 @@ pub fn run(app: &AppHandle, bot_id: &str, running: bool) {
 
 pub fn claude_status(app: &AppHandle, status: &ClaudeStatus) {
     let _ = app.emit(CLAUDE, status);
+}
+
+pub fn codex_status(app: &AppHandle, status: &CodexStatus) {
+    let _ = app.emit(CODEX, status);
+}
+
+/// Kbot > Settings… were saved.
+pub fn settings_changed(app: &AppHandle, settings: &AppSettings) {
+    let _ = app.emit(SETTINGS, settings);
 }
 
 /// Kbot > Settings… was chosen in the menu bar.

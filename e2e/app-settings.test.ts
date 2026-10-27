@@ -32,14 +32,13 @@ test("runs use Sonnet 5.5 until another default model is saved", async () => {
     await waitForText(browser, "Fake reply to: first");
 
     await browser.keys(["Control", ","]);
-    const model = browser.$('//*[@role="dialog"]//select[@id="default-model"]');
-    await model.waitForDisplayed();
-    assert.equal(await model.getValue(), "claude-sonnet-5-5");
-    // selectByVisibleText doesn't change a <select> in the embedded WebDriver.
-    await browser.execute((select: HTMLSelectElement) => {
-      select.value = "claude-opus-5-5";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    }, await model);
+    await browser.$('//*[@role="dialog"]//*[@role="tab"][normalize-space()="AI Providers"]').click();
+    const opus = browser.$('//*[@role="radiogroup"][@aria-label="Claude model"]/*[@role="radio"][contains(., "Opus 5.5")]');
+    const sonnet = browser.$('//*[@role="radiogroup"][@aria-label="Claude model"]/*[@role="radio"][contains(., "Sonnet 5.5")]');
+    await sonnet.waitForDisplayed();
+    assert.equal(await sonnet.getAttribute("aria-checked"), "true");
+    await opus.click();
+    await browser.waitUntil(async () => (await opus.getAttribute("aria-checked")) === "true");
     // Saved on change; there's no Save button.
     await browser.$('[aria-label="Close settings"]').click();
     await browser.$('[role="dialog"]').waitForExist({ reverse: true });

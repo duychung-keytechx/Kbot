@@ -47,7 +47,7 @@ export function PermissionCard({ botId, message }: { botId: string; message: Per
           </p>
           {message.summary && <p className="selectable text-[13px] leading-[19px] text-subtle">{message.summary}</p>}
           {message.detail && (
-            <pre className="selectable max-h-[160px] overflow-auto rounded-[10px] bg-white px-2.5 py-2 font-mono text-[12px] leading-[18px] break-all whitespace-pre-wrap text-ink">
+            <pre className="selectable max-h-[160px] overflow-auto rounded-[10px] bg-surface px-2.5 py-2 font-mono text-[12px] leading-[18px] break-all whitespace-pre-wrap text-ink">
               {message.detail}
             </pre>
           )}
@@ -68,7 +68,7 @@ export function PermissionCard({ botId, message }: { botId: string; message: Per
           {asking && message.status === "denied" ? "Skipped" : STATUS[message.status]}
         </p>
       )}
-      {error && <p className="text-[12.5px] text-[#c4321c]">{error}</p>}
+      {error && <p className="text-[12.5px] text-danger">{error}</p>}
     </div>
   );
 }
@@ -126,7 +126,7 @@ function Questions({
                   aria-pressed={on}
                   onClick={() => toggle(q, o.label)}
                   className={`flex flex-col items-start rounded-[10px] border px-2.5 py-1.5 text-left disabled:cursor-default ${
-                    on ? "border-ink-strong bg-white" : "border-button-line bg-white/60 hover:bg-white"
+                    on ? "border-ink-strong bg-surface" : "border-button-line bg-surface/60 hover:bg-surface"
                   } ${locked && !on ? "opacity-40" : ""}`}
                 >
                   <span className="text-[13px] font-medium text-ink">{o.label}</span>

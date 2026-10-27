@@ -20,6 +20,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::events;
+use crate::models::Effort;
 use crate::AppState;
 
 /// `--permission-mode` for agent runs: every tool call runs without asking,
@@ -247,6 +248,7 @@ pub struct RunSpec {
     pub tools: Tools,
     pub add_dirs: Vec<String>,
     pub model: Option<String>,
+    pub effort: Option<Effort>,
     pub json_schema: Option<Value>,
     /// Empty working directory of the bot, so sessions never mix with a user project.
     pub cwd: PathBuf,
@@ -297,6 +299,9 @@ impl RunSpec {
         }
         if let Some(model) = &self.model {
             args.extend(["--model".into(), model.clone()]);
+        }
+        if let Some(effort) = self.effort {
+            args.extend(["--effort".into(), effort.as_str().into()]);
         }
         if let Some(schema) = &self.json_schema {
             args.extend(["--json-schema".into(), schema.to_string()]);
@@ -488,25 +493,8 @@ async fn next_input(input: &mut Option<&mut UnboundedReceiver<String>>) -> Optio
 
 /// One-off structured call (`--json-schema`) with no tools and no saved
 /// session. Returns the `structured_output` object.
-pub async fn ask_json(
-    bin: &Path,
-    cwd: PathBuf,
-    system_prompt: String,
-    prompt: String,
-    schema: Value,
-    model: Option<String>,
-    cancel: Arc<Notify>,
-) -> Result<Value, String> {
-    let spec = RunSpec {
-        prompt,
-        system_prompt,
-        session: Session::Ephemeral,
-        tools: Tools::None,
-        add_dirs: Vec::new(),
-        model,
-        json_schema: Some(schema),
-        cwd,
-    };
+pub async fn ask_json(bin: &Path, spec: RunSpec, cancel: Arc<Notify>) -> Result<Value, String> {
+    let spec = RunSpec { session: Session::Ephemeral, tools: Tools::None, ..spec };
     let mut output = None;
     let mut error = None;
     let exit = run(bin, &spec, cancel, None, |event| {
@@ -665,10 +653,12 @@ mod tests {
             tools: Tools::AllExcept(vec!["WebSearch", "WebFetch"]),
             add_dirs: vec!["/a".into(), "/b".into()],
             model: Some("sonnet".into()),
+            effort: Some(Effort::Low),
             json_schema: None,
             cwd: PathBuf::from("/tmp"),
         };
         let args = spec.args().join("|");
+        assert!(args.contains("|--model|sonnet|--effort|low"));
         assert!(args.contains("|--setting-sources||--strict-mcp-config|"));
         assert!(args.contains("|--permission-mode|bypassPermissions|"));
         assert!(args.contains("|--input-format|stream-json|--permission-prompt-tool|stdio|"));

@@ -58,7 +58,7 @@ function CardFrame({
     >
       {title && <p className="text-[14px] leading-[21px] text-ink">{title}</p>}
       {children}
-      {error && <p className="text-[12.5px] text-[#c4321c]">{error}</p>}
+      {error && <p className="text-[12.5px] text-danger">{error}</p>}
     </div>
   );
 }
@@ -350,6 +350,6 @@ function Field({ label, changed, children }: { label: string; changed?: boolean;
 
 function Changed() {
   return (
-    <span className="ml-1.5 rounded-full bg-white px-1.5 py-px text-[11px] font-medium text-ink-strong">changed</span>
+    <span className="ml-1.5 rounded-full bg-surface px-1.5 py-px text-[11px] font-medium text-ink-strong">changed</span>
   );
 }

@@ -1,5 +1,5 @@
-//! Agent runtime. Each run is a `claude -p` process (see `claude.rs`) driven
-//! from its own async task; its output is streamed into the chat through
+//! Agent runtime. Each run is a `claude -p` or `codex exec` process (see
+//! `claude.rs`, `codex.rs`, picked in Kbot > Settings…) driven from its own async task; its output is streamed into the chat through
 //! `kbot://message` upserts, so the window never blocks on the model.
 
 use std::path::PathBuf;
@@ -11,8 +11,9 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::claude::{self, ClaudeStatus, Event, Exit, RunSpec, Session, Tools};
+use crate::codex::{self, CodexStatus};
 use crate::events;
-use crate::models::{AgentConfig, Bot, Message, MessageBody, PermissionStatus, Question, Schedule, Weekday};
+use crate::models::{AgentConfig, AppSettings, Bot, Message, MessageBody, PermissionStatus, Provider, Question, Schedule, Weekday};
 use crate::runs::Ticket;
 use crate::AppState;
 
@@ -39,30 +40,62 @@ pub fn post(app: &AppHandle, bot_id: &str, body: MessageBody) -> Option<Message>
     }
 }
 
-/// Empty working directory of a bot's Claude process.
+/// Empty working directory of a bot's agent process.
 pub fn workdir(app: &AppHandle, bot_id: &str) -> PathBuf {
     app.state::<AppState>().data_dir.join("agents").join(bot_id)
 }
 
-/// The `--model` a bot runs with: its own, else the default from Kbot > Settings….
-pub fn model(app: &AppHandle, bot: &Bot) -> String {
-    let default = || app.state::<AppState>().store.lock().unwrap().app_settings().default_model;
-    bot.config.model.clone().unwrap_or_else(default)
+pub fn app_settings(app: &AppHandle) -> AppSettings {
+    app.state::<AppState>().store.lock().unwrap().app_settings()
 }
 
-/// The `claude` binary, once Claude Code is installed and signed in with a subscription.
-pub async fn ready_binary(app: &AppHandle) -> Result<PathBuf, String> {
-    match claude::status(app, false).await {
-        ClaudeStatus::Ready { .. } => app
-            .state::<AppState>()
-            .claude
-            .binary()
-            .ok_or_else(|| "Claude Code could not be found.".into()),
-        ClaudeStatus::NotInstalled => Err("Claude Code isn't installed. Follow the Connect Claude steps.".into()),
-        ClaudeStatus::LoggedOut => Err("Claude Code isn't signed in. Follow the Connect Claude steps.".into()),
-        ClaudeStatus::NotSubscription { auth_method } => Err(format!(
-            "Claude Code is signed in with {auth_method}, not a Claude subscription. Follow the Connect Claude steps."
-        )),
+/// The binary of `provider`'s CLI, once it is installed and signed in
+/// (with a subscription, for Claude Code).
+pub async fn ready_binary(app: &AppHandle, provider: Provider) -> Result<PathBuf, String> {
+    let state = app.state::<AppState>();
+    match provider {
+        Provider::Claude => match claude::status(app, false).await {
+            ClaudeStatus::Ready { .. } => state.claude.binary().ok_or_else(|| "Claude Code could not be found.".into()),
+            ClaudeStatus::NotInstalled => Err("Claude Code isn't installed. Follow the Connect Claude steps.".into()),
+            ClaudeStatus::LoggedOut => Err("Claude Code isn't signed in. Follow the Connect Claude steps.".into()),
+            ClaudeStatus::NotSubscription { auth_method } => Err(format!(
+                "Claude Code is signed in with {auth_method}, not a Claude subscription. Follow the Connect Claude steps."
+            )),
+        },
+        Provider::Codex => match codex::status(app, false).await {
+            CodexStatus::Ready { .. } => state.codex.binary().ok_or_else(|| "Codex could not be found.".into()),
+            CodexStatus::NotInstalled => Err("Codex isn't installed. Follow the Connect Codex steps.".into()),
+            CodexStatus::LoggedOut => Err("Codex isn't signed in. Follow the Connect Codex steps.".into()),
+        },
+    }
+}
+
+/// One-off structured call with no tools on the bot's provider and model,
+/// for onboarding helpers.
+pub async fn ask_json(
+    app: &AppHandle,
+    bot: &Bot,
+    system_prompt: String,
+    prompt: String,
+    schema: Value,
+    cancel: std::sync::Arc<tokio::sync::Notify>,
+) -> Result<Value, String> {
+    let settings = app_settings(app);
+    let bin = ready_binary(app, settings.provider).await?;
+    let spec = RunSpec {
+        prompt,
+        system_prompt,
+        session: Session::Ephemeral,
+        tools: Tools::None,
+        add_dirs: Vec::new(),
+        model: settings.model_for(&bot.config),
+        effort: Some(settings.effort),
+        json_schema: Some(schema),
+        cwd: workdir(app, &bot.id),
+    };
+    match settings.provider {
+        Provider::Claude => claude::ask_json(&bin, spec, cancel).await,
+        Provider::Codex => codex::ask_json(app, &bin, spec, cancel).await,
     }
 }
 
@@ -93,10 +126,12 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         };
         post(app, bot_id, MessageBody::System { text: format!("{job} \u{b7} {when}") });
     }
-    let bin = ready_binary(app).await?;
+    let settings = app_settings(app);
+    let provider = settings.provider;
+    let bin = ready_binary(app, provider).await?;
 
     let new_session = || Session::New(uuid::Uuid::new_v4().to_string());
-    let session = match state.store.lock().unwrap().session_id(bot_id)? {
+    let session = match state.store.lock().unwrap().session_id(bot_id, provider)? {
         Some(id) => Session::Resume(id),
         None => new_session(),
     };
@@ -106,21 +141,26 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         session,
         tools: tools(&bot.config),
         add_dirs: bot.config.workspace_folders.clone(),
-        model: Some(model(app, &bot)),
+        model: settings.model_for(&bot.config),
+        effort: Some(settings.effort),
         json_schema: None,
         cwd: workdir(app, bot_id),
     };
     let mut input = ticket.input.lock().await;
     let job = matches!(trigger, Trigger::Job { .. });
     loop {
-        let mut reply = Reply::new(app, &bot, job);
-        let exit = claude::run(&bin, &spec, ticket.cancel.clone(), Some(&mut *input), |e| reply.on_event(e)).await;
+        let mut reply = Reply::new(app, &bot, provider, job);
+        let cancel = ticket.cancel.clone();
+        let exit = match provider {
+            Provider::Claude => claude::run(&bin, &spec, cancel, Some(&mut *input), |e| reply.on_event(e)).await,
+            Provider::Codex => codex::run(app, &bin, &spec, cancel, |e| reply.on_event(e)).await,
+        };
         reply.close();
         reply.expire_unanswered();
         let exit = exit?;
-        // The saved session is gone (e.g. Claude Code's history was cleared): start over once.
+        // The saved session is gone (e.g. the CLI's history was cleared): start over once.
         if reply.session_missing && matches!(spec.session, Session::Resume(_)) {
-            state.store.lock().unwrap().set_session_id(bot_id, None)?;
+            state.store.lock().unwrap().set_session_id(bot_id, provider, None)?;
             spec.session = new_session();
             continue;
         }
@@ -132,14 +172,23 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
             Exit::Finished { success: false, stderr } if !reply.got_result => {
                 reply.failed = true;
                 let detail = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output");
-                post(app, bot_id, MessageBody::System { text: format!("Claude Code stopped unexpectedly: {detail}") });
+                let text = format!("{} stopped unexpectedly: {detail}", provider.cli());
+                post(app, bot_id, MessageBody::System { text });
             }
             _ => {}
         }
         if reply.failed {
             // Maybe signed out or switched to an API key: re-check so the UI can react.
-            state.claude.invalidate();
-            claude::status(app, true).await;
+            match provider {
+                Provider::Claude => {
+                    state.claude.invalidate();
+                    claude::status(app, true).await;
+                }
+                Provider::Codex => {
+                    state.codex.invalidate();
+                    codex::status(app, true).await;
+                }
+            }
         }
         if reply.notify && !reply.text.is_empty() {
             notify(app, &bot.name, reply.text.chars().take(180).collect());
@@ -177,6 +226,7 @@ struct Reply<'a> {
     app: &'a AppHandle,
     bot_id: &'a str,
     bot_name: &'a str,
+    provider: Provider,
     /// A scheduled job, which marks the bot unread when it needs the user.
     job: bool,
     /// A scheduled job that should notify the user (result, or waiting for an answer).
@@ -197,11 +247,12 @@ struct Reply<'a> {
 }
 
 impl<'a> Reply<'a> {
-    fn new(app: &'a AppHandle, bot: &'a Bot, job: bool) -> Self {
+    fn new(app: &'a AppHandle, bot: &'a Bot, provider: Provider, job: bool) -> Self {
         Self {
             app,
             bot_id: &bot.id,
             bot_name: &bot.name,
+            provider,
             job,
             notify: job &&bot.config.schedule.as_ref().is_some_and(|s| s.notify),
             asked: Vec::new(),
@@ -230,7 +281,7 @@ impl<'a> Reply<'a> {
                     return false;
                 }
                 let store = self.app.state::<AppState>();
-                if let Err(e) = store.store.lock().unwrap().set_session_id(self.bot_id, Some(&session_id)) {
+                if let Err(e) = store.store.lock().unwrap().set_session_id(self.bot_id, self.provider, Some(&session_id)) {
                     eprintln!("saving session failed: {e}");
                 }
             }
@@ -287,11 +338,11 @@ impl<'a> Reply<'a> {
                 self.got_result = true;
                 if is_error {
                     self.failed = true;
-                    if errors.iter().any(|e| e.starts_with("No conversation found")) {
+                    if errors.iter().any(|e| e.starts_with(codex::SESSION_MISSING)) {
                         self.session_missing = true;
                     } else if !self.rate_limited {
                         let detail = text.filter(|t| !t.is_empty()).unwrap_or_else(|| errors.join("; "));
-                        self.system(format!("Claude couldn't finish: {detail}"));
+                        self.system(format!("{} couldn't finish: {detail}", self.provider.name()));
                     }
                 }
             }

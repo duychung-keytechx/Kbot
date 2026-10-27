@@ -56,7 +56,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
           e.preventDefault();
           void save();
         }}
-        className="flex max-h-full w-[520px] max-w-full flex-col overflow-hidden rounded-2xl border border-modal-line bg-white shadow-[0_20px_50px_rgba(0,0,0,0.2),0_2px_6px_rgba(0,0,0,0.06)]"
+        className="flex max-h-full w-[520px] max-w-full flex-col overflow-hidden rounded-2xl border border-modal-line bg-surface shadow-[0_20px_50px_rgba(0,0,0,0.2),0_2px_6px_rgba(0,0,0,0.06)]"
       >
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-divider pr-4 pl-5">
           <p id="edit-bot-title" className="min-w-0 truncate text-[15px] font-semibold text-ink">
@@ -81,7 +81,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
               maxLength={MAX_NAME}
               spellCheck={false}
               onChange={(e) => setName(e.target.value)}
-              className="selectable rounded-[10px] border border-field-line bg-white px-2.5 py-2 text-[13.5px] text-ink"
+              className="selectable rounded-[10px] border border-field-line bg-surface px-2.5 py-2 text-[13.5px] text-ink"
             />
           </Field>
           <Field label="Description" htmlFor="edit-description">
@@ -96,7 +96,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
           <Field
             label="Instructions"
             htmlFor="edit-instructions"
-            hint="What the agent follows. Changing it starts a new conversation with Claude."
+            hint="What the agent follows. Changing it starts a new conversation."
           >
             <textarea
               id="edit-instructions"
@@ -116,7 +116,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
               Search the web
             </Switch>
           </div>
-          {error && <p className="text-[12.5px] text-[#c4321c]">{error}</p>}
+          {error && <p className="text-[12.5px] text-danger">{error}</p>}
         </div>
 
         <div className="flex shrink-0 items-center justify-end gap-2 border-t border-divider px-4 py-3">

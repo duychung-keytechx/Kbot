@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::migrate;
-use crate::models::{AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Message, MessageBody, SetupState};
+use crate::models::{AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Message, MessageBody, Provider, SetupState};
 use crate::setup::Step;
 
 pub struct Store {
@@ -26,6 +26,13 @@ fn to_text<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(s)) => s,
         other => panic!("expected a string-serialized enum, got {other:?}"),
+    }
+}
+
+fn session_column(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Claude => "claude_session_id",
+        Provider::Codex => "codex_session_id",
     }
 }
 
@@ -239,12 +246,12 @@ impl Store {
         Ok(message)
     }
 
-    /// Deletes a bot's chat history and forgets its Claude session, so the
+    /// Deletes a bot's chat history and forgets its agent sessions, so the
     /// next reply starts fresh. Config and setup state are kept.
     pub fn clear_messages(&mut self, bot_id: &str) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(err)?;
         let updated = tx
-            .execute("UPDATE bots SET preview = '', claude_session_id = NULL WHERE id = ?1", params![bot_id])
+            .execute("UPDATE bots SET preview = '', claude_session_id = NULL, codex_session_id = NULL WHERE id = ?1", params![bot_id])
             .map_err(err)?;
         if updated == 0 {
             return Err(format!("unknown bot {bot_id}"));
@@ -295,15 +302,20 @@ impl Store {
         self.update_bot(bot_id, "setup_state = ?2, setup_step = ?3", &[&to_text(&state), &step])
     }
 
-    pub fn session_id(&self, bot_id: &str) -> Result<Option<String>, String> {
-        self.conn
-            .query_row("SELECT claude_session_id FROM bots WHERE id = ?1", [bot_id], |r| r.get(0))
-            .map_err(err)
+    pub fn session_id(&self, bot_id: &str, provider: Provider) -> Result<Option<String>, String> {
+        let sql = format!("SELECT {} FROM bots WHERE id = ?1", session_column(provider));
+        self.conn.query_row(&sql, [bot_id], |r| r.get(0)).map_err(err)
     }
 
-    /// `None` makes the next run start a fresh Claude session.
-    pub fn set_session_id(&self, bot_id: &str, session_id: Option<&str>) -> Result<(), String> {
-        self.update_bot(bot_id, "claude_session_id = ?2", &[&session_id])
+    /// `None` makes the next run on `provider` start a fresh session.
+    pub fn set_session_id(&self, bot_id: &str, provider: Provider, session_id: Option<&str>) -> Result<(), String> {
+        self.update_bot(bot_id, &format!("{} = ?2", session_column(provider)), &[&session_id])
+    }
+
+    /// Makes the next run on any provider start fresh, e.g. after the bot's
+    /// instructions change.
+    pub fn forget_sessions(&self, bot_id: &str) -> Result<(), String> {
+        self.update_bot(bot_id, "claude_session_id = NULL, codex_session_id = NULL", &[])
     }
 
     /// Returns whether the flag changed.
@@ -339,19 +351,34 @@ impl Store {
             .map_err(err)
     }
 
+    /// A setting saved with `to_text`; `None` when missing or unknown.
+    fn app_setting_enum<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        serde_json::from_value(self.app_setting(key)?.into()).ok()
+    }
+
     pub fn app_settings(&self) -> AppSettings {
-        AppSettings { default_model: self.app_setting("default_model").unwrap_or_else(|| DEFAULT_MODEL.into()) }
+        AppSettings {
+            provider: self.app_setting_enum("provider").unwrap_or_default(),
+            default_model: self.app_setting("default_model").unwrap_or_else(|| DEFAULT_MODEL.into()),
+            codex_model: self.app_setting("codex_model").filter(|m| !m.is_empty()),
+            effort: self.app_setting_enum("effort").unwrap_or_default(),
+            theme: self.app_setting_enum("theme").unwrap_or_default(),
+        }
     }
 
     pub fn set_app_settings(&self, settings: &AppSettings) -> Result<(), String> {
-        self.set_app_setting("default_model", &settings.default_model)
+        self.set_app_setting("provider", &to_text(&settings.provider))?;
+        self.set_app_setting("default_model", &settings.default_model)?;
+        self.set_app_setting("codex_model", settings.codex_model.as_deref().unwrap_or(""))?;
+        self.set_app_setting("effort", &to_text(&settings.effort))?;
+        self.set_app_setting("theme", &to_text(&settings.theme))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{BotIcon, BotImage, Control, Schedule};
+    use crate::models::{BotIcon, BotImage, Control, Effort, Schedule, Theme};
 
     fn bot(id: &str, updated_at: i64) -> Bot {
         Bot {
@@ -392,12 +419,38 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_default_to_sonnet_and_save() {
+    fn app_settings_default_to_claude_sonnet_and_save() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.app_settings().default_model, DEFAULT_MODEL);
-        store.set_app_settings(&AppSettings { default_model: "opus".into() }).unwrap();
-        store.set_app_settings(&AppSettings { default_model: "claude-opus-5-5".into() }).unwrap();
-        assert_eq!(store.app_settings().default_model, "claude-opus-5-5");
+        let defaults = store.app_settings();
+        assert_eq!(defaults.provider, Provider::Claude);
+        assert_eq!(defaults.default_model, DEFAULT_MODEL);
+        assert_eq!(defaults.codex_model, None);
+        assert_eq!(defaults.effort, Effort::Medium);
+        assert_eq!(defaults.theme, Theme::Light);
+        let saved = AppSettings {
+            provider: Provider::Codex,
+            default_model: "claude-opus-5-5".into(),
+            codex_model: Some("gpt-5.2-codex".into()),
+            effort: Effort::High,
+            theme: Theme::Dark,
+        };
+        store.set_app_settings(&saved).unwrap();
+        assert_eq!(store.app_settings(), saved);
+        store.set_app_settings(&AppSettings { codex_model: None, ..saved }).unwrap();
+        assert_eq!(store.app_settings().codex_model, None);
+    }
+
+    #[test]
+    fn sessions_are_kept_per_provider() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("a", 1)).unwrap();
+        store.set_session_id("a", Provider::Claude, Some("c1")).unwrap();
+        store.set_session_id("a", Provider::Codex, Some("x1")).unwrap();
+        assert_eq!(store.session_id("a", Provider::Claude).unwrap().as_deref(), Some("c1"));
+        assert_eq!(store.session_id("a", Provider::Codex).unwrap().as_deref(), Some("x1"));
+        store.forget_sessions("a").unwrap();
+        assert_eq!(store.session_id("a", Provider::Claude).unwrap(), None);
+        assert_eq!(store.session_id("a", Provider::Codex).unwrap(), None);
     }
 
     #[test]
@@ -451,13 +504,13 @@ mod tests {
         for id in ["a", "b"] {
             store.push_message(id, Message::new(MessageBody::User { text: "hi".into() })).unwrap();
         }
-        store.set_session_id("a", Some("s1")).unwrap();
+        store.set_session_id("a", Provider::Claude, Some("s1")).unwrap();
 
         store.clear_messages("a").unwrap();
         assert!(store.messages("a").is_empty());
         assert_eq!(store.messages("b").len(), 1);
         assert_eq!(store.bot("a").unwrap().preview, "");
-        assert_eq!(store.session_id("a").unwrap(), None);
+        assert_eq!(store.session_id("a", Provider::Claude).unwrap(), None);
         assert!(store.clear_messages("missing").is_err());
     }
 
@@ -534,7 +587,7 @@ mod tests {
         assert_eq!(old.setup_state, SetupState::Pending);
         assert_eq!(old.config, AgentConfig::default());
         assert_eq!(old.preview, "hi");
-        assert_eq!(store.session_id("old").unwrap(), None);
+        assert_eq!(store.session_id("old", Provider::Claude).unwrap(), None);
         assert_eq!(store.setup_step("old").unwrap(), None);
     }
 
@@ -551,14 +604,14 @@ mod tests {
         };
         store.set_config("a", &config).unwrap();
         store.set_setup("a", SetupState::Pending, Some(&Step::Web)).unwrap();
-        store.set_session_id("a", Some("s1")).unwrap();
+        store.set_session_id("a", Provider::Claude, Some("s1")).unwrap();
         store.set_last_run_at("a", 42).unwrap();
 
         let a = store.bot("a").unwrap();
         assert_eq!(a.config, config);
         assert_eq!(a.last_run_at, Some(42));
         assert_eq!(store.setup_step("a").unwrap(), Some(Step::Web));
-        assert_eq!(store.session_id("a").unwrap().as_deref(), Some("s1"));
+        assert_eq!(store.session_id("a", Provider::Claude).unwrap().as_deref(), Some("s1"));
 
         store.set_setup("a", SetupState::Done, None).unwrap();
         assert_eq!(store.bot("a").unwrap().setup_state, SetupState::Done);

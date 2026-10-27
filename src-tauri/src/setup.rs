@@ -18,7 +18,6 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 
 use crate::agent::{self, post};
-use crate::claude;
 use crate::events;
 use crate::models::{AgentConfig, Bot, Message, MessageBody, Schedule, SetupAnswer, SetupState, Weekday};
 use crate::runs::Ticket;
@@ -258,7 +257,7 @@ pub fn restart(app: &AppHandle, bot_id: &str) -> Result<(), String> {
 pub fn skip(app: &AppHandle, bot_id: &str) -> Result<(), String> {
     store_op(app, |s| {
         s.set_setup(bot_id, SetupState::Skipped, None)?;
-        s.set_session_id(bot_id, None)
+        s.forget_sessions(bot_id)
     })?;
     post(app, bot_id, MessageBody::System { text: format!("Setup skipped. Type {COMMAND} any time to set me up.") });
     events::bots_changed(app);
@@ -448,7 +447,7 @@ fn finish(app: &AppHandle, bot: &Bot, updated: bool) -> Result<(), String> {
     store_op(app, |s| {
         s.set_setup(&bot.id, SetupState::Done, None)?;
         // The session's system prompt is fixed when it starts; begin one with the new instructions.
-        s.set_session_id(&bot.id, None)
+        s.forget_sessions(&bot.id)
     })?;
     let mut text = if updated { "Setup updated" } else { "Setup complete" }.to_string();
     if let Some(schedule) = &bot.config.schedule {
@@ -482,11 +481,8 @@ async fn run_generate(app: &AppHandle, ticket: &Ticket, what: &Generate) -> Resu
     let bot = store_op(app, |s| s.bot(bot_id))?;
     let summary = describe_for_claude(&bot);
     let ask = |system: String, prompt: String, schema: serde_json::Value| {
-        let (app, cancel, model) = (app.clone(), ticket.cancel.clone(), Some(agent::model(app, &bot)));
-        async move {
-            let bin = agent::ready_binary(&app).await?;
-            claude::ask_json(&bin, agent::workdir(&app, bot_id), system, prompt, schema, model, cancel).await
-        }
+        let (app, cancel, bot) = (app.clone(), ticket.cancel.clone(), bot.clone());
+        async move { agent::ask_json(&app, &bot, system, prompt, schema, cancel).await }
     };
     // The step to go to, and what to post after entering it.
     let (next, follow_up) = match what {

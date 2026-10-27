@@ -4,6 +4,7 @@ use tauri::{AppHandle, State};
 
 use crate::agent::{self, Trigger};
 use crate::claude::{self, ClaudeStatus};
+use crate::codex::{self, CodexModels, CodexStatus};
 use crate::events;
 use crate::models::{
     AgentConfig, AppSettings, Avatar, Bot, BotImage, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
@@ -163,6 +164,19 @@ pub async fn claude_status(app: AppHandle, refresh: bool) -> ClaudeStatus {
     claude::status(&app, refresh).await
 }
 
+/// Whether the Codex CLI is installed and signed in (or set up with its own
+/// model provider); `refresh` skips the cache.
+#[tauri::command]
+pub async fn codex_status(app: AppHandle, refresh: bool) -> CodexStatus {
+    codex::status(&app, refresh).await
+}
+
+/// The Codex models to offer in Kbot > Settings….
+#[tauri::command]
+pub async fn codex_models() -> CodexModels {
+    tauri::async_runtime::spawn_blocking(codex::models).await.unwrap_or(CodexModels { configured: None, models: Vec::new() })
+}
+
 /// Bots with a reply, job or setup step in progress.
 #[tauri::command]
 pub fn running_bots(state: State<AppState>) -> Vec<String> {
@@ -203,7 +217,7 @@ pub fn redo_setup(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
     if state.runs.running().contains(&bot_id) {
         return Err(BUSY.into());
     }
-    state.store.lock().unwrap().set_session_id(&bot_id, None)?;
+    state.store.lock().unwrap().forget_sessions(&bot_id)?;
     setup::restart(&app, &bot_id)
 }
 
@@ -255,7 +269,9 @@ pub fn clear_chat(app: AppHandle, state: State<AppState>, bot_id: String) -> Cmd
 pub fn update_bot_config(app: AppHandle, state: State<AppState>, bot_id: String, config: AgentConfig) -> CmdResult<Bot> {
     let mut config = config;
     config.workspace_folders = setup::dedupe(config.workspace_folders);
-    config.model = config.model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    let clean = |model: Option<String>| model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    config.model = clean(config.model);
+    config.codex_model = clean(config.codex_model);
     if let Some(schedule) = &config.schedule {
         schedule.validate()?;
     }
@@ -269,7 +285,7 @@ pub fn update_bot_config(app: AppHandle, state: State<AppState>, bot_id: String,
             store.set_config(&bot_id, &config)?;
             // A resumed session keeps its first system prompt, so the new
             // config only takes effect in a new session.
-            store.set_session_id(&bot_id, None)?;
+            store.forget_sessions(&bot_id)?;
         }
         store.bot(&bot_id)?
     };
@@ -286,7 +302,7 @@ pub fn rename_bot(app: AppHandle, state: State<AppState>, bot_id: String, name: 
         if store.bot(&bot_id)?.name != name {
             store.set_name(&bot_id, &name)?;
             // The system prompt names the bot; see `update_bot_config`.
-            store.set_session_id(&bot_id, None)?;
+            store.forget_sessions(&bot_id)?;
         }
         store.bot(&bot_id)?
     };
@@ -327,13 +343,20 @@ pub fn get_app_settings(state: State<AppState>) -> AppSettings {
     state.store.lock().unwrap().app_settings()
 }
 
+/// Saves Kbot > Settings… and tells every window (the provider decides
+/// which Connect screen and model field show).
 #[tauri::command]
-pub fn update_app_settings(state: State<AppState>, settings: AppSettings) -> CmdResult<AppSettings> {
-    let default_model = settings.default_model.trim();
+pub fn update_app_settings(app: AppHandle, state: State<AppState>, settings: AppSettings) -> CmdResult<AppSettings> {
+    let default_model = settings.default_model.trim().to_string();
     if default_model.is_empty() {
         return Err("Choose a model".into());
     }
-    let store = state.store.lock().unwrap();
-    store.set_app_settings(&AppSettings { default_model: default_model.to_string() })?;
-    Ok(store.app_settings())
+    let codex_model = settings.codex_model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    let saved = {
+        let store = state.store.lock().unwrap();
+        store.set_app_settings(&AppSettings { default_model, codex_model, ..settings })?;
+        store.app_settings()
+    };
+    events::settings_changed(&app, &saved);
+    Ok(saved)
 }

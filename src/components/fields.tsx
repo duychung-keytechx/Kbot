@@ -17,11 +17,11 @@ const DAY_NAMES: Record<Weekday, string> = {
 };
 
 export const primaryButton =
-  "rounded-[15px] bg-ink-strong px-[13px] py-1.5 text-[13px] font-medium text-white disabled:opacity-50";
+  "rounded-[15px] bg-ink-strong px-[13px] py-1.5 text-[13px] font-medium text-ink-inverse disabled:opacity-50";
 export const secondaryButton =
-  "rounded-[15px] border border-button-line bg-white px-[13px] py-1.5 text-[13px] font-medium text-ink disabled:opacity-50";
+  "rounded-[15px] border border-button-line bg-surface px-[13px] py-1.5 text-[13px] font-medium text-ink disabled:opacity-50";
 export const textArea =
-  "selectable w-full resize-none rounded-[10px] border border-field-line bg-white px-2.5 py-2 text-[13.5px] leading-[20px] text-ink";
+  "selectable w-full resize-none rounded-[10px] border border-field-line bg-surface px-2.5 py-2 text-[13.5px] leading-[20px] text-ink";
 
 /** Same wording as `agent::describe_days` in Rust. */
 export function describeDays(days: Weekday[]): string {
@@ -73,7 +73,7 @@ const PRESETS = [15, 30, 60];
 
 const chip = (on: boolean) =>
   `h-7 rounded-full px-3 text-[12.5px] font-medium disabled:opacity-60 ${
-    on ? "bg-ink-strong text-white" : "border border-button-line bg-white text-subtle"
+    on ? "bg-ink-strong text-ink-inverse" : "border border-button-line bg-surface text-subtle"
   }`;
 
 /** How often an interval job runs: 15 min, 30 min, 1 hour or a custom number of minutes or hours. */
@@ -137,7 +137,7 @@ export function IntervalPicker({
               setAmount(e.target.value);
               onChange(toMinutes(e.target.value, hours));
             }}
-            className="w-[70px] rounded-[8px] border border-field-line bg-white px-2 py-1 text-[13.5px] text-ink disabled:opacity-60"
+            className="w-[70px] rounded-[8px] border border-field-line bg-surface px-2 py-1 text-[13.5px] text-ink disabled:opacity-60"
           />
           <span className="relative flex items-center">
             <select
@@ -149,7 +149,7 @@ export function IntervalPicker({
                 setHours(h);
                 onChange(toMinutes(amount, h));
               }}
-              className="appearance-none rounded-[8px] border border-field-line bg-white py-1 pr-6 pl-2 text-[13.5px] text-ink disabled:opacity-60"
+              className="appearance-none rounded-[8px] border border-field-line bg-surface py-1 pr-6 pl-2 text-[13.5px] text-ink disabled:opacity-60"
             >
               <option value="minutes">minutes</option>
               <option value="hours">hours</option>
@@ -159,7 +159,7 @@ export function IntervalPicker({
         </div>
       )}
       {!validEvery(minutes) && !disabled && (
-        <p className="text-[12px] text-[#c4321c]">{`Pick from ${MIN_EVERY} minutes to 24 hours.`}</p>
+        <p className="text-[12px] text-danger">{`Pick from ${MIN_EVERY} minutes to 24 hours.`}</p>
       )}
     </div>
   );
@@ -181,7 +181,7 @@ export function TimeInput({
       value={value}
       disabled={disabled}
       onChange={(e) => e.target.value && onChange(e.target.value)}
-      className="rounded-[8px] border border-field-line bg-white px-2 py-1 text-[13.5px] text-ink disabled:opacity-60"
+      className="rounded-[8px] border border-field-line bg-surface px-2 py-1 text-[13.5px] text-ink disabled:opacity-60"
     />
   );
 }
@@ -211,7 +211,7 @@ export function DatePicker({
           min={isoDate(new Date())}
           disabled={disabled}
           onChange={(e) => e.target.value && onChange({ date: e.target.value })}
-          className="rounded-[8px] border border-field-line bg-white px-2 py-1 text-[13.5px] text-ink disabled:opacity-60"
+          className="rounded-[8px] border border-field-line bg-surface px-2 py-1 text-[13.5px] text-ink disabled:opacity-60"
         />
         {children}
       </div>
@@ -247,7 +247,7 @@ export function DayPicker({
             disabled={disabled}
             onClick={() => onChange(on ? days.filter((x) => x !== d) : WEEKDAYS.filter((x) => x === d || days.includes(x)))}
             className={`size-7 rounded-full text-[12px] font-medium disabled:opacity-60 ${
-              on ? "bg-ink-strong text-white" : "border border-button-line bg-white text-subtle"
+              on ? "bg-ink-strong text-ink-inverse" : "border border-button-line bg-surface text-subtle"
             }`}
           >
             {DAY_LETTERS[d]}
@@ -334,7 +334,7 @@ export function FolderList({
   return (
     <div className="flex flex-col gap-1.5">
       {folders.map((f) => (
-        <div key={f} className="flex items-center gap-2 rounded-[8px] bg-white px-2.5 py-1.5">
+        <div key={f} className="flex items-center gap-2 rounded-[8px] bg-surface px-2.5 py-1.5">
           <p className="selectable min-w-0 flex-1 truncate text-[13px] text-ink" title={f}>
             {f}
           </p>

@@ -13,10 +13,13 @@ export function ConnectClaude({
   status,
   checking,
   onCheck,
+  onSettings,
 }: {
   status: Exclude<ClaudeStatus, { state: "ready" }>;
   checking: boolean;
   onCheck: () => void;
+  /** Opens Kbot > Settings…, where Codex can be picked instead. */
+  onSettings: () => void;
 }) {
   return (
     <main data-tauri-drag-region className="flex flex-1 flex-col items-center justify-center bg-main px-6">
@@ -27,18 +30,38 @@ export function ConnectClaude({
           sent anywhere else, and API keys are never used.
         </p>
         <Steps status={status} />
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onCheck}
-            disabled={checking}
-            className="rounded-[15px] bg-ink-strong px-[13px] py-1.5 text-[13px] font-medium text-white disabled:opacity-60"
-          >
-            {checking ? "Checking…" : "Check again"}
-          </button>
-        </div>
+        <Actions checking={checking} onCheck={onCheck} onSettings={onSettings} other="Use Codex instead" />
       </div>
     </main>
+  );
+}
+
+/** "Check again", plus a link to Settings to switch provider. */
+export function Actions({
+  checking,
+  onCheck,
+  onSettings,
+  other,
+}: {
+  checking: boolean;
+  onCheck: () => void;
+  onSettings: () => void;
+  other: string;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        onClick={onCheck}
+        disabled={checking}
+        className="rounded-[15px] bg-ink-strong px-[13px] py-1.5 text-[13px] font-medium text-ink-inverse disabled:opacity-60"
+      >
+        {checking ? "Checking…" : "Check again"}
+      </button>
+      <button type="button" onClick={onSettings} className="text-[13px] text-subtle hover:text-ink">
+        {other}
+      </button>
+    </div>
   );
 }
 
@@ -82,7 +105,7 @@ function Steps({ status }: { status: Exclude<ClaudeStatus, { state: "ready" }> }
   }
 }
 
-function Step({ n, children }: { n: number; children: ReactNode }) {
+export function Step({ n, children }: { n: number; children: ReactNode }) {
   return (
     <li className="flex gap-2.5">
       <span className="flex size-[21px] shrink-0 items-center justify-center rounded-full bg-bubble text-[12px] font-medium text-subtle">
@@ -93,7 +116,7 @@ function Step({ n, children }: { n: number; children: ReactNode }) {
   );
 }
 
-function Command({ text }: { text: string }) {
+export function Command({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex items-center gap-2 rounded-[10px] bg-bubble py-1.5 pr-1.5 pl-3">
@@ -106,7 +129,7 @@ function Command({ text }: { text: string }) {
             setTimeout(() => setCopied(false), 1500);
           })
         }
-        className="shrink-0 rounded-[12px] border border-button-line bg-white px-2.5 py-1 text-[12px] font-medium text-ink"
+        className="shrink-0 rounded-[12px] border border-button-line bg-surface px-2.5 py-1 text-[12px] font-medium text-ink"
       >
         {copied ? "Copied" : "Copy"}
       </button>

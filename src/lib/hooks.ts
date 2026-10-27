@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "./api";
-import type { Bot, ClaudeStatus, Message } from "./types";
+import type { AppSettings, Bot, ClaudeStatus, CodexStatus, Message } from "./types";
 
 export function useBots(): Bot[] {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -82,26 +82,37 @@ export function useRunning(): Set<string> {
   return running;
 }
 
-/**
- * Claude Code's install/sign-in state; `undefined` until the first check.
- * `check()` re-runs `claude auth status` ("Check again").
- */
-export function useClaudeStatus(): { status: ClaudeStatus | undefined; checking: boolean; check: () => void } {
-  const [status, setStatus] = useState<ClaudeStatus>();
-  const [checking, setChecking] = useState(true);
-  const load = useCallback((refresh: boolean) => {
-    setChecking(true);
-    backend
-      .claudeStatus(refresh)
-      .then(setStatus)
-      .finally(() => setChecking(false));
-  }, []);
+/** A CLI's install/sign-in state; `undefined` until the first check or while `enabled` is false. */
+interface CliStatus<T> {
+  status: T | undefined;
+  checking: boolean;
+  /** Re-runs the check, skipping the cache ("Check again"). */
+  check: () => void;
+}
+
+function useCliStatus<T extends { state: string }>(
+  enabled: boolean,
+  fetch: (refresh: boolean) => Promise<T>,
+  subscribe: (cb: (status: T) => void) => () => void,
+): CliStatus<T> {
+  const [status, setStatus] = useState<T>();
+  const [checking, setChecking] = useState(enabled);
+  const load = useCallback(
+    (refresh: boolean) => {
+      setChecking(true);
+      fetch(refresh)
+        .then(setStatus)
+        .finally(() => setChecking(false));
+    },
+    [fetch],
+  );
   const ready = status?.state === "ready";
   const readyRef = useRef(ready);
   readyRef.current = ready;
   useEffect(() => {
+    if (!enabled) return;
     load(false);
-    const off = backend.onClaudeStatus(setStatus);
+    const off = subscribe(setStatus);
     // Signing in happens in Terminal; look again when the user comes back.
     const onFocus = () => readyRef.current || load(true);
     window.addEventListener("focus", onFocus);
@@ -109,6 +120,34 @@ export function useClaudeStatus(): { status: ClaudeStatus | undefined; checking:
       off();
       window.removeEventListener("focus", onFocus);
     };
-  }, [load]);
-  return { status, checking, check: () => load(true) };
+  }, [enabled, load, subscribe]);
+  return { status: enabled ? status : undefined, checking, check: () => load(true) };
+}
+
+/** Claude Code's state (`claude auth status`). */
+export function useClaudeStatus(enabled = true): CliStatus<ClaudeStatus> {
+  return useCliStatus(enabled, backend.claudeStatus, backend.onClaudeStatus);
+}
+
+/** The Codex CLI's state (`codex login status`, or a model provider in its config). */
+export function useCodexStatus(enabled = true): CliStatus<CodexStatus> {
+  return useCliStatus(enabled, backend.codexStatus, backend.onCodexStatus);
+}
+
+/** Kbot > Settings…, kept live via `kbot://settings`; `undefined` until loaded. */
+export function useAppSettings(): AppSettings | undefined {
+  const [settings, setSettings] = useState<AppSettings>();
+  useEffect(() => {
+    let alive = true;
+    backend
+      .getAppSettings()
+      .then((s) => alive && setSettings(s))
+      .catch((e) => console.error(e));
+    const off = backend.onAppSettings(setSettings);
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+  return settings;
 }

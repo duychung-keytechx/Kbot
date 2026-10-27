@@ -2,15 +2,19 @@ import { useEffect, useState } from "react";
 import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { ChatView } from "./components/ChatView";
 import { ConnectClaude } from "./components/ConnectClaude";
+import { ConnectCodex } from "./components/ConnectCodex";
 import { NewBotModal } from "./components/NewBotModal";
 import { Sidebar } from "./components/Sidebar";
 import { backend } from "./lib/api";
-import { useBots, useClaudeStatus, useRunning, useWindowFocused } from "./lib/hooks";
+import { useAppSettings, useBots, useClaudeStatus, useCodexStatus, useRunning, useWindowFocused } from "./lib/hooks";
+import { applyTheme } from "./lib/theme";
 
 export default function App() {
   const bots = useBots();
   const running = useRunning();
-  const claude = useClaudeStatus();
+  const settings = useAppSettings();
+  const claude = useClaudeStatus(settings?.provider === "claude");
+  const codex = useCodexStatus(settings?.provider === "codex");
   const focused = useWindowFocused();
   const [selectedId, setSelectedId] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -44,8 +48,20 @@ export default function App() {
     };
   }, []);
 
+  const theme = settings?.theme;
+  useEffect(() => {
+    if (theme) applyTheme(theme);
+  }, [theme]);
+
   const selected = bots.find((b) => b.id === selectedId);
-  const chatShown = !!selected && (!claude.status || claude.status.state === "ready");
+  // The active provider's CLI isn't ready: its Connect screen replaces the chat.
+  const connect =
+    claude.status && claude.status.state !== "ready" ? (
+      <ConnectClaude status={claude.status} checking={claude.checking} onCheck={claude.check} onSettings={() => setSettingsOpen(true)} />
+    ) : codex.status && codex.status.state !== "ready" ? (
+      <ConnectCodex status={codex.status} checking={codex.checking} onCheck={codex.check} onSettings={() => setSettingsOpen(true)} />
+    ) : null;
+  const chatShown = !!selected && !connect;
 
   // The chat being looked at is read; its job results don't count as unread.
   const viewing = focused && chatShown ? selected.id : null;
@@ -56,8 +72,8 @@ export default function App() {
   return (
     <div className="relative flex h-full overflow-hidden">
       <Sidebar bots={bots} running={running} selectedId={selectedId} onSelect={setSelectedId} onNewBot={() => setCreating(true)} />
-      {claude.status && claude.status.state !== "ready" ? (
-        <ConnectClaude status={claude.status} checking={claude.checking} onCheck={claude.check} />
+      {connect ? (
+        connect
       ) : selected ? (
         <ChatView bot={selected} running={running.has(selected.id)} />
       ) : (
@@ -68,7 +84,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setCreating(true)}
-                className="rounded-[17px] bg-ink-strong px-4 py-2 text-[14px] font-medium text-white"
+                className="rounded-[17px] bg-ink-strong px-4 py-2 text-[14px] font-medium text-ink-inverse"
               >
                 Create New Bot
               </button>

@@ -44,7 +44,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
           e.preventDefault();
           void create();
         }}
-        className="flex max-h-full w-[440px] flex-col overflow-hidden rounded-2xl border border-modal-line bg-white shadow-[0_20px_50px_rgba(0,0,0,0.2),0_2px_6px_rgba(0,0,0,0.06)]"
+        className="flex max-h-full w-[440px] flex-col overflow-hidden rounded-2xl border border-modal-line bg-surface shadow-[0_20px_50px_rgba(0,0,0,0.2),0_2px_6px_rgba(0,0,0,0.06)]"
       >
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-divider pr-4 pl-5">
           <p id="new-bot-title" className="text-[15px] font-semibold text-ink">
@@ -70,7 +70,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
             placeholder="Name your bot"
             maxLength={60}
             spellCheck={false}
-            className="h-[42px] shrink-0 self-stretch rounded-[10px] border border-composer-line bg-white px-3.5 py-2.5 text-center text-[14px] leading-[normal] text-ink"
+            className="h-[42px] shrink-0 self-stretch rounded-[10px] border border-composer-line bg-surface px-3.5 py-2.5 text-center text-[14px] leading-[normal] text-ink"
           />
 
           <div role="radiogroup" aria-label="Picture" className="flex flex-col gap-3 self-stretch">
@@ -86,7 +86,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
                     onClick={() => setImage(s)}
                     className={`flex size-[52px] shrink-0 items-center justify-center rounded-full ${
                       s === image
-                        ? "bg-white shadow-[inset_0_0_0_1.5px_var(--color-shape-selected),0_1px_3px_rgba(0,0,0,0.1)]"
+                        ? "bg-surface shadow-[inset_0_0_0_1.5px_var(--color-shape-selected),0_1px_3px_rgba(0,0,0,0.1)]"
                         : "hover:bg-bubble"
                     }`}
                   >
@@ -97,7 +97,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
             ))}
           </div>
 
-          {error && <p className="text-[12.5px] text-[#F0263E]">{error}</p>}
+          {error && <p className="text-[12.5px] text-danger">{error}</p>}
         </div>
 
         <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-divider px-4 pt-3.5 pb-4">
@@ -111,7 +111,7 @@ export function NewBotModal({ onClose, onCreated }: { onClose: () => void; onCre
           <button
             type="submit"
             disabled={!canCreate}
-            className="rounded-[17px] bg-ink-strong px-4 py-2 text-[14px] font-medium text-white disabled:bg-disabled disabled:text-disabled-ink"
+            className="rounded-[17px] bg-ink-strong px-4 py-2 text-[14px] font-medium text-ink-inverse disabled:bg-disabled disabled:text-disabled-ink"
           >
             Create
           </button>

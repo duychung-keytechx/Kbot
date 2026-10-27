@@ -95,7 +95,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
 
         {(inSetup || error) && (
           <div className="flex items-center gap-3 px-6">
-            {error && <p className="min-w-0 flex-1 text-[12.5px] text-[#c4321c]">{error}</p>}
+            {error && <p className="min-w-0 flex-1 text-[12.5px] text-danger">{error}</p>}
             {inSetup && (
               <button
                 type="button"

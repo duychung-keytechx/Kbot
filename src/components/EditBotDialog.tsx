@@ -14,6 +14,7 @@ import {
   TinyCloseIcon,
   TinyPlusIcon,
 } from "./Icons";
+import { TagDot, tagStyle, tagsOf } from "./tags";
 
 /** The parts of `AgentConfig` that "Edit" in a bot's menu changes. */
 type Draft = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess">;
@@ -278,15 +279,6 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: st
   );
 }
 
-export function TagDot({ color, size = 8 }: { color: string; size?: number }) {
-  return (
-    <span
-      className="shrink-0 rounded-full shadow-[inset_0_0_0_1px_var(--color-tag-ring)]"
-      style={{ width: size, height: size, background: color }}
-    />
-  );
-}
-
 /** The "Tags" tab. Every change is saved right away. */
 function TagsTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const tags = useTags();
@@ -302,7 +294,7 @@ function TagsTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
     return counts;
   }, [bots]);
   const onBot = new Set(bot.tags);
-  const chips = bot.tags.map((id) => tags.find((t) => t.id === id)).filter((t): t is Tag => !!t);
+  const chips = tagsOf(bot.tags, tags);
 
   /** Runs a backend call and shows its error; returns whether it worked. */
   const run = async (call: Promise<unknown>) => {
@@ -464,16 +456,19 @@ function TagInput({
         }`}
       >
         {chips.map((tag) => (
-          <span key={tag.id} className="flex items-center gap-1.5 rounded-md bg-bubble py-1 pr-[7px] pl-2">
-            <TagDot color={tag.color} />
-            <span className="text-[13px] leading-4 text-ink">{tag.name}</span>
+          <span
+            key={tag.id}
+            style={tagStyle(tag.color)}
+            className="tag-tint flex items-center gap-1.5 rounded-md py-1 pr-[7px] pl-2"
+          >
+            <span className="text-[13px] leading-4 font-medium">{tag.name}</span>
             <button
               type="button"
               aria-label={`Remove ${tag.name}`}
               onClick={() => onRemove(tag.id)}
-              className="-m-1 flex p-1"
+              className="-m-1 flex p-1 opacity-60 hover:opacity-100"
             >
-              <TinyCloseIcon />
+              <TinyCloseIcon color="currentColor" />
             </button>
           </span>
         ))}

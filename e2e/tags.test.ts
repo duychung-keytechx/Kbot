@@ -113,6 +113,14 @@ test("tags are made, changed and put on bots from the Edit dialog, and filter th
     await browser.keys("Escape");
     await browser.$(dialog).waitForExist({ reverse: true });
 
+    // Each row and the chat header name the bot's tags.
+    const tagList = (scope: string) =>
+      `${scope}//*[@aria-label="Tags"][.//*[normalize-space()="Work"]][.//*[normalize-space()="Soon"]]`;
+    await browser.$(tagList(sidebarRow("Planner"))).waitForExist();
+    assert.equal(await browser.$$(`${sidebarRow("Coder")}//*[@aria-label="Tags"]`).length, 0);
+    await browser.$(sidebarRow("Planner")).click();
+    await browser.$(tagList("//header")).waitForExist();
+
     // A tag chip under Search shows only the bots with it; Search finds tag names.
     await browser.$(filterChip("Work")).click();
     await browser.$(sidebarRow("Coder")).waitForExist({ reverse: true });

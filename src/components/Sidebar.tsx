@@ -6,9 +6,10 @@ import { useTags } from "../lib/hooks";
 import type { Bot, Tag } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { EditBotDialog, TagDot } from "./EditBotDialog";
+import { EditBotDialog } from "./EditBotDialog";
 import { describeSchedule } from "./fields";
 import { ClearIcon, ClockIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon } from "./Icons";
+import { TagLabels, tagStyle, tagsOf } from "./tags";
 import { WindowControls } from "./WindowControls";
 
 export function Sidebar({
@@ -82,6 +83,7 @@ export function Sidebar({
           <BotRow
             key={bot.id}
             bot={bot}
+            tags={tagsOf(bot.tags, tags)}
             active={bot.id === selectedId}
             busy={running.has(bot.id)}
             onClick={() => onSelect(bot.id)}
@@ -112,12 +114,12 @@ function TagFilter({
             type="button"
             aria-pressed={on}
             onClick={() => onSelect(on ? undefined : tag.id)}
-            className={`flex max-w-full items-center gap-1.5 rounded-full border py-[3px] pr-2.5 pl-2 text-[12px] ${
-              on ? "border-ink bg-ink text-ink-inverse" : "border-field-line bg-surface text-ink hover:bg-row-hover"
+            style={on ? { background: tag.color } : tagStyle(tag.color)}
+            className={`max-w-full truncate rounded-full px-2.5 py-[3px] text-[12px] font-medium ${
+              on ? "text-white shadow-[inset_0_0_0_1px_var(--color-tag-ring)]" : "tag-tint hover:brightness-95"
             }`}
           >
-            <TagDot color={tag.color} size={7} />
-            <span className="truncate">{tag.name}</span>
+            {tag.name}
           </button>
         );
       })}
@@ -198,7 +200,19 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
   );
 }
 
-function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; busy: boolean; onClick: () => void }) {
+function BotRow({
+  bot,
+  tags,
+  active,
+  busy,
+  onClick,
+}: {
+  bot: Bot;
+  tags: Tag[];
+  active: boolean;
+  busy: boolean;
+  onClick: () => void;
+}) {
   // Right-click opens the context menu at the pointer.
   const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
   const [dialog, setDialog] = useState<"edit" | "clear" | "delete">();
@@ -212,12 +226,12 @@ function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; bus
           setMenuAt({ x: e.clientX, y: e.clientY });
         }}
         aria-current={active || undefined}
-        className={`flex w-full shrink-0 items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left ${
+        className={`flex w-full shrink-0 items-center gap-3 rounded-[10px] px-2.5 py-3 text-left ${
           active ? "bg-row-active" : menuAt ? "bg-row-hover" : "hover:bg-row-hover"
         }`}
       >
-        <BotAvatar avatar={bot.avatar} size={30} />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <BotAvatar avatar={bot.avatar} size={34} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <p className="min-w-0 truncate text-[14px] font-semibold text-ink">{bot.name}</p>
             {bot.config.schedule && (
@@ -242,6 +256,7 @@ function BotRow({ bot, active, busy, onClick }: { bot: Bot; active: boolean; bus
               </>
             )}
           </div>
+          <TagLabels tags={tags} />
         </div>
       </button>
       {menuAt && (

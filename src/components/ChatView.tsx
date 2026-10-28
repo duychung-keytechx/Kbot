@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { backend, errorText } from "../lib/api";
-import { useMessages } from "../lib/hooks";
+import { useMessages, useTags } from "../lib/hooks";
 import type { Bot, Message } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { Composer } from "./Composer";
@@ -15,9 +15,11 @@ import {
   SetupScheduleCard,
 } from "./messages/SetupCards";
 import { SettingsPanel } from "./SettingsPanel";
+import { TagPills, tagsOf } from "./tags";
 
 export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   const messages = useMessages(bot.id);
+  const tags = useTags();
   const scroller = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
@@ -67,6 +69,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
             <BotAvatar avatar={bot.avatar} size={18} />
             <p className="truncate text-[13.5px] font-semibold text-ink">{bot.name}</p>
           </button>
+          <TagPills tags={tagsOf(bot.tags, tags)} max={5} />
           <div data-tauri-drag-region className="flex-1 self-stretch" />
           {isTask && (
             <button

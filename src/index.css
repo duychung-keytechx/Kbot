@@ -125,9 +125,20 @@
   --color-row-open: #2b2b29;
   --color-checkbox-line: #5a5a58;
   --color-tag-ring: rgb(255 255 255 / 0.28);
+  /* `tag-tint` on a dark surface: a stronger tint over a lifted gray, lighter text. */
+  --tag-fill: 26%;
+  --tag-fill-base: #454543;
+  --tag-text: 42%;
+  --tag-text-base: #ffffff;
 
   --focus-ring: rgb(255 255 255 / 0.3);
   --scrollbar: rgb(255 255 255 / 0.16);
+}
+
+/* A tag chip tinted with its color, which the element sets as `--tag` (see tagStyle). */
+@utility tag-tint {
+  background: color-mix(in srgb, var(--tag) var(--tag-fill, 14%), var(--tag-fill-base, #ffffff));
+  color: color-mix(in srgb, var(--tag) var(--tag-text, 72%), var(--tag-text-base, #000000));
 }
 
 @layer base {

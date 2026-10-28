@@ -3,7 +3,8 @@ import { backend, errorText } from "../lib/api";
 import { useMessages, useTags } from "../lib/hooks";
 import type { Bot, Message } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
-import { Composer } from "./Composer";
+import { Composer, type CommandName } from "./Composer";
+import { ClearHistoryDialog, DeleteBotDialog } from "./ConfirmDialog";
 import { secondaryButton } from "./fields";
 import { ComputerCard } from "./messages/ComputerCard";
 import { PermissionCard } from "./messages/PermissionCard";
@@ -23,6 +24,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [dialog, setDialog] = useState<"clear-history" | "delete">();
   const onboarding = bot.setupState === "pending";
   const inSetup = onboarding || bot.editing;
   // The run is paused on a question or approval card, not working.
@@ -38,6 +40,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   useEffect(() => {
     setSettingsOpen(false);
     setError(undefined);
+    setDialog(undefined);
   }, [bot.id]);
 
   useLayoutEffect(() => {
@@ -55,6 +58,9 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
       return false;
     }
   };
+
+  // /setup is handled by the backend like any message; the rest ask first, as in the sidebar menu.
+  const runCommand = (name: CommandName) => (name === "setup" ? send("/setup") : setDialog(name));
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -119,8 +125,11 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
           running={running}
           onSend={send}
           onStop={() => void backend.cancelRun(bot.id)}
+          onCommand={runCommand}
         />
       </main>
+      {dialog === "clear-history" && <ClearHistoryDialog bot={bot} onClose={() => setDialog(undefined)} />}
+      {dialog === "delete" && <DeleteBotDialog bot={bot} onClose={() => setDialog(undefined)} />}
       {settingsOpen && <SettingsPanel bot={bot} running={running} onClose={() => setSettingsOpen(false)} />}
     </div>
   );

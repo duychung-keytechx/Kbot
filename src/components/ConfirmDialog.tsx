@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { errorText } from "../lib/api";
+import { backend, errorText } from "../lib/api";
+import type { Bot } from "../lib/types";
 import { secondaryButton } from "./fields";
 
 /** A small "are you sure?" dialog for destructive actions; shows the error if `onConfirm` fails. */
@@ -67,5 +68,31 @@ export function ConfirmDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+/** "Clear History" from a bot's menu, or `/clear-history` in its chat. */
+export function ClearHistoryDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title="Clear History"
+      message={`Delete all messages with ${bot.name}? Its settings are kept. This can't be undone.`}
+      confirmLabel="Clear History"
+      onConfirm={() => backend.clearChat(bot.id)}
+      onClose={onClose}
+    />
+  );
+}
+
+/** "Delete Chat" from a bot's menu, or `/delete` in its chat. */
+export function DeleteBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title="Delete Chat"
+      message={`Delete ${bot.name} with its messages and settings? This can't be undone.`}
+      confirmLabel="Delete"
+      onConfirm={() => backend.deleteBot(bot.id)}
+      onClose={onClose}
+    />
   );
 }

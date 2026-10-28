@@ -1,11 +1,10 @@
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import logo from "../assets/kbot-logo.png";
-import { backend } from "../lib/api";
 import { formatListTime } from "../lib/format";
 import { useTags } from "../lib/hooks";
 import type { Bot, Tag } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ClearHistoryDialog, DeleteBotDialog } from "./ConfirmDialog";
 import { EditBotDialog } from "./EditBotDialog";
 import { describeSchedule } from "./fields";
 import { ClearIcon, ClockIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon } from "./Icons";
@@ -277,24 +276,8 @@ function BotRow({
         />
       )}
       {dialog === "edit" && <EditBotDialog bot={bot} onClose={() => setDialog(undefined)} />}
-      {dialog === "clear" && (
-        <ConfirmDialog
-          title="Clear History"
-          message={`Delete all messages with ${bot.name}? Its settings are kept. This can't be undone.`}
-          confirmLabel="Clear History"
-          onConfirm={() => backend.clearChat(bot.id)}
-          onClose={() => setDialog(undefined)}
-        />
-      )}
-      {dialog === "delete" && (
-        <ConfirmDialog
-          title="Delete Chat"
-          message={`Delete ${bot.name} with its messages and settings? This can't be undone.`}
-          confirmLabel="Delete"
-          onConfirm={() => backend.deleteBot(bot.id)}
-          onClose={() => setDialog(undefined)}
-        />
-      )}
+      {dialog === "clear" && <ClearHistoryDialog bot={bot} onClose={() => setDialog(undefined)} />}
+      {dialog === "delete" && <DeleteBotDialog bot={bot} onClose={() => setDialog(undefined)} />}
     </>
   );
 }

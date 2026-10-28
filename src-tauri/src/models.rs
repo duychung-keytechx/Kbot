@@ -110,6 +110,48 @@ pub struct Bot {
     /// A scheduled job posted a result or question the user hasn't seen.
     #[serde(default)]
     pub unread: bool,
+    /// Ids of the bot's tags, in the order they were added.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// A label for grouping bots, shared by all of them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    /// One of `Tag::COLORS`.
+    pub color: String,
+}
+
+impl Tag {
+    /// The swatches in a tag's "Color" menu, in order (mirrored in `src/lib/types.ts`).
+    pub const COLORS: [&str; 11] = [
+        "#141414", "#9A5B34", "#F0263E", "#FF5A1F", "#F7931E", "#16B364", "#12A89A", "#1A73F0", "#7C3AED", "#EC2D8C",
+        "#8E8E8E",
+    ];
+    /// Longest name the UI lets you type.
+    pub const MAX_NAME: usize = 30;
+
+    /// A name as typed, trimmed; an error if it's empty or too long.
+    pub fn clean_name(name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Tag name is required".into());
+        }
+        if name.chars().count() > Self::MAX_NAME {
+            return Err(format!("Tag name can be at most {} characters", Self::MAX_NAME));
+        }
+        Ok(name.to_string())
+    }
+
+    pub fn check_color(color: &str) -> Result<(), String> {
+        match Self::COLORS.contains(&color) {
+            true => Ok(()),
+            false => Err(format!("unknown tag color {color}")),
+        }
+    }
 }
 
 /// Whether the onboarding chat has configured this bot yet.

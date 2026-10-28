@@ -10,12 +10,20 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::migrate;
-use crate::models::{AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Message, MessageBody, Provider, SetupState};
+use crate::models::{
+    AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Message, MessageBody, Provider, SetupState, Tag,
+};
 use crate::setup::Step;
 
 pub struct Store {
     conn: Connection,
 }
+
+/// `bots` plus `tag_ids`, the bot's tag ids as a JSON array in the order added.
+const BOTS: &str = "SELECT bots.*,
+        (SELECT json_group_array(tag_id)
+         FROM (SELECT tag_id FROM bot_tags WHERE bot_id = bots.id ORDER BY added_at, rowid)) AS tag_ids
+    FROM bots";
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -73,7 +81,22 @@ fn bot_from_row(row: &Row) -> rusqlite::Result<Bot> {
         last_run_at: row.get("last_run_at")?,
         editing: setup_state == SetupState::Done && row.get::<_, Option<String>>("setup_step")?.is_some(),
         unread: row.get("unread")?,
+        tags: from_json(row, "tag_ids")?,
     })
+}
+
+fn tag_from_row(row: &Row) -> rusqlite::Result<Tag> {
+    Ok(Tag { id: row.get("id")?, name: row.get("name")?, color: row.get("color")? })
+}
+
+/// "A tag named “x” already exists" instead of SQLite's UNIQUE error.
+fn tag_err(name: &str) -> impl Fn(rusqlite::Error) -> String + '_ {
+    move |e| match e {
+        rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
+            format!("A tag named “{name}” already exists")
+        }
+        e => e.to_string(),
+    }
 }
 
 fn message_from_row(row: &Row) -> rusqlite::Result<Message> {
@@ -112,15 +135,14 @@ impl Store {
 
     /// Pinned bots first, then newest first.
     pub fn bots(&self) -> Vec<Bot> {
-        self.query_bots("SELECT * FROM bots ORDER BY pinned DESC, created_at DESC, rowid DESC")
+        self.query_bots(&format!("{BOTS} ORDER BY pinned DESC, created_at DESC, rowid DESC"))
     }
 
     /// Set-up bots with a scheduled job, for the scheduler.
     pub fn scheduled_bots(&self) -> Vec<Bot> {
-        self.query_bots(
-            "SELECT * FROM bots
-             WHERE setup_state != 'pending' AND json_extract(config, '$.schedule') IS NOT NULL",
-        )
+        self.query_bots(&format!(
+            "{BOTS} WHERE setup_state != 'pending' AND json_extract(config, '$.schedule') IS NOT NULL"
+        ))
     }
 
     fn query_bots(&self, sql: &str) -> Vec<Bot> {
@@ -135,7 +157,7 @@ impl Store {
 
     pub fn bot(&self, bot_id: &str) -> Result<Bot, String> {
         self.conn
-            .query_row("SELECT * FROM bots WHERE id = ?1", [bot_id], bot_from_row)
+            .query_row(&format!("{BOTS} WHERE id = ?1"), [bot_id], bot_from_row)
             .optional()
             .map_err(err)?
             .ok_or_else(|| format!("unknown bot {bot_id}"))
@@ -330,6 +352,82 @@ impl Store {
         self.update_bot(bot_id, "last_run_at = ?2", &[&ms])
     }
 
+    /// All tags, by name.
+    pub fn tags(&self) -> Vec<Tag> {
+        let query = || -> rusqlite::Result<Vec<Tag>> {
+            self.conn
+                .prepare_cached("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE, created_at")?
+                .query_map([], tag_from_row)?
+                .collect()
+        };
+        query().unwrap_or_else(|e| {
+            eprintln!("list tags failed: {e}");
+            Vec::new()
+        })
+    }
+
+    /// Adds a tag named `name` (already cleaned) in the first palette color no
+    /// tag uses yet, cycling once all are taken.
+    pub fn insert_tag(&self, name: &str) -> Result<Tag, String> {
+        let used: Vec<String> = self.tags().into_iter().map(|t| t.color).collect();
+        let color = Tag::COLORS
+            .iter()
+            .find(|c| !used.iter().any(|u| u == *c))
+            .unwrap_or(&Tag::COLORS[used.len() % Tag::COLORS.len()]);
+        let tag = Tag { id: uuid::Uuid::new_v4().to_string(), name: name.into(), color: color.to_string() };
+        self.conn
+            .execute(
+                "INSERT INTO tags (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![tag.id, tag.name, tag.color, chrono::Utc::now().timestamp_millis()],
+            )
+            .map_err(tag_err(name))?;
+        Ok(tag)
+    }
+
+    /// Runs `UPDATE tags SET <assignment> WHERE id = ?1` and fails on an unknown tag.
+    fn update_tag(&self, tag_id: &str, assignment: &str, value: &str) -> Result<(), String> {
+        let sql = format!("UPDATE tags SET {assignment} WHERE id = ?1");
+        match self.conn.execute(&sql, params![tag_id, value]).map_err(tag_err(value))? {
+            0 => Err(format!("unknown tag {tag_id}")),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn rename_tag(&self, tag_id: &str, name: &str) -> Result<(), String> {
+        self.update_tag(tag_id, "name = ?2", name)
+    }
+
+    pub fn set_tag_color(&self, tag_id: &str, color: &str) -> Result<(), String> {
+        Tag::check_color(color)?;
+        self.update_tag(tag_id, "color = ?2", color)
+    }
+
+    /// Deletes a tag; it comes off every bot (`ON DELETE CASCADE`).
+    pub fn delete_tag(&self, tag_id: &str) -> Result<(), String> {
+        match self.conn.execute("DELETE FROM tags WHERE id = ?1", [tag_id]).map_err(err)? {
+            0 => Err(format!("unknown tag {tag_id}")),
+            _ => Ok(()),
+        }
+    }
+
+    /// Puts a tag on a bot or takes it off. Returns whether anything changed.
+    pub fn set_bot_tag(&self, bot_id: &str, tag_id: &str, on: bool) -> Result<bool, String> {
+        let changed = if on {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO bot_tags (bot_id, tag_id, added_at) VALUES (?1, ?2, ?3)",
+                params![bot_id, tag_id, chrono::Utc::now().timestamp_millis()],
+            )
+        } else {
+            self.conn.execute("DELETE FROM bot_tags WHERE bot_id = ?1 AND tag_id = ?2", [bot_id, tag_id])
+        };
+        changed.map(|n| n > 0).map_err(|e| match e {
+            rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
+                format!("unknown bot {bot_id} or tag {tag_id}")
+            }
+            e => e.to_string(),
+        })
+    }
+
     pub fn app_setting(&self, key: &str) -> Option<String> {
         self.conn
             .query_row("SELECT value FROM app_settings WHERE key = ?1", [key], |r| r.get(0))
@@ -393,6 +491,7 @@ mod tests {
             last_run_at: None,
             editing: false,
             unread: false,
+            tags: Vec::new(),
         }
     }
 
@@ -559,6 +658,49 @@ mod tests {
         assert!(store.messages("a").is_empty());
         assert_eq!(store.messages("b").len(), 1);
         assert!(store.delete_bot("a").is_err());
+    }
+
+    #[test]
+    fn tags_go_on_bots_in_order_and_come_off_when_deleted() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("a", 1)).unwrap();
+        store.insert_bot(bot("b", 2)).unwrap();
+        let work = store.insert_tag("work").unwrap();
+        let home = store.insert_tag("Home").unwrap();
+        // New tags take the first unused palette colors.
+        assert_eq!([work.color.as_str(), home.color.as_str()], [Tag::COLORS[0], Tag::COLORS[1]]);
+        assert_eq!(store.tags().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Home", "work"]);
+
+        assert!(store.set_bot_tag("a", &work.id, true).unwrap());
+        assert!(store.set_bot_tag("a", &home.id, true).unwrap());
+        assert!(!store.set_bot_tag("a", &work.id, true).unwrap());
+        store.set_bot_tag("b", &work.id, true).unwrap();
+        assert_eq!(store.bot("a").unwrap().tags, [work.id.clone(), home.id.clone()]);
+        assert_eq!(store.bots()[0].tags, [work.id.clone()]);
+        assert!(store.set_bot_tag("missing", &work.id, true).is_err());
+
+        assert!(store.set_bot_tag("a", &work.id, false).unwrap());
+        assert_eq!(store.bot("a").unwrap().tags, [home.id.clone()]);
+
+        store.delete_tag(&home.id).unwrap();
+        assert!(store.bot("a").unwrap().tags.is_empty());
+        assert!(store.delete_tag(&home.id).is_err());
+        // Deleting a bot drops its tags but keeps the tag.
+        store.delete_bot("b").unwrap();
+        assert_eq!(store.tags().len(), 1);
+    }
+
+    #[test]
+    fn tag_names_are_unique_ignoring_case() {
+        let store = Store::open_in_memory().unwrap();
+        let work = store.insert_tag("work").unwrap();
+        let other = store.insert_tag("other").unwrap();
+        assert_eq!(store.insert_tag("Work").unwrap_err(), "A tag named “Work” already exists");
+        assert_eq!(store.rename_tag(&other.id, "WORK").unwrap_err(), "A tag named “WORK” already exists");
+        store.rename_tag(&work.id, "Work").unwrap();
+        store.set_tag_color(&work.id, "#16B364").unwrap();
+        assert!(store.set_tag_color(&work.id, "red").is_err());
+        assert_eq!(store.tags()[1], Tag { id: work.id, name: "Work".into(), color: "#16B364".into() });
     }
 
     #[test]

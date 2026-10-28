@@ -185,7 +185,7 @@ test("Edit in a bot's menu changes its setup in a dialog, not in the chat", asyn
 
     // Cancel leaves the setup as it was.
     await contextMenu(browser, "Planner", "Edit");
-    const dialog = '//*[@role="dialog"][.//*[normalize-space()="Edit Planner"]]';
+    const dialog = '//*[@role="dialog"][starts-with(@aria-label, "Edit ")]';
     await browser.$(dialog).waitForDisplayed();
     assert.equal(await browser.$("#edit-instructions").getValue(), before.instructions);
     await browser.$("#edit-description").setValue("Plans weeks");
@@ -197,7 +197,7 @@ test("Edit in a bot's menu changes its setup in a dialog, not in the chat", asyn
     await browser.$("#edit-name").setValue("Week Planner");
     await browser.$("#edit-description").setValue("Plans weeks");
     await browser.$("#edit-instructions").setValue("Keep answers under 5 bullets");
-    await browser.$('//label[normalize-space()="Search the web"]//button[@role="switch"]').click();
+    await browser.$('//label[contains(normalize-space(), "Search the web")]//button[@role="switch"]').click();
     await browser.$(button("Save")).click();
     await browser.$(dialog).waitForExist({ reverse: true });
     await browser.$(sidebarRow("Week Planner")).waitForExist();

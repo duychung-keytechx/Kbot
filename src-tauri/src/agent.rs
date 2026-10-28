@@ -635,6 +635,7 @@ mod tests {
             last_run_at: None,
             editing: false,
             unread: false,
+            tags: Vec::new(),
         }
     }
 

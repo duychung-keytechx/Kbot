@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "./api";
-import type { AppSettings, Bot, ClaudeStatus, CodexStatus, Message } from "./types";
+import type { AppSettings, Bot, ClaudeStatus, CodexStatus, Message, Tag } from "./types";
 
 export function useBots(): Bot[] {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -14,6 +14,21 @@ export function useBots(): Bot[] {
     };
   }, []);
   return bots;
+}
+
+/** All tags, by name, kept live via `kbot://tags`. */
+export function useTags(): Tag[] {
+  const [tags, setTags] = useState<Tag[]>([]);
+  useEffect(() => {
+    let alive = true;
+    backend.listTags().then((t) => alive && setTags(t));
+    const off = backend.onTags(setTags);
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+  return tags;
 }
 
 /** Messages for one bot, kept live via `kbot://message` upserts and `kbot://cleared`. */

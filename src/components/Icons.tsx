@@ -195,3 +195,52 @@ export const MoonIcon = ({ color = "currentColor", className }: IconProps) => (
     <path d="M8 .8A5.4 5.4 0 1 0 11.2 8A4.3 4.3 0 0 1 8 .8Z" stroke={color} strokeWidth="1.2" strokeLinejoin="round" />
   </svg>
 );
+
+/** Edit bot dialog: "Agent Info" nav item (14px circled i). */
+export const InfoIcon = ({ color = "var(--color-icon)", className }: IconProps) => (
+  <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden className={`block shrink-0 ${className ?? ""}`}>
+    <circle cx={7} cy={7} r={6.25} stroke={color} strokeWidth={1.5} />
+    <path d="M7 6.4V10.4M7 3.9V4.1" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
+  </svg>
+);
+
+/** Edit bot dialog: "Tags" nav item (14px price tag). */
+export const TagIcon = ({ color = "var(--color-icon)", className }: IconProps) => (
+  <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden className={`block shrink-0 ${className ?? ""}`}>
+    <path d="M1 1H7L13.5 7.5L7.5 13.5L1 7V1Z" stroke={color} strokeWidth={1.3} strokeLinejoin="round" />
+    <circle cx={4.5} cy={4.5} r={1.3} fill={color} />
+  </svg>
+);
+
+/** Tag menu: "Rename" (10px pencil). */
+export const PencilIcon = ({ color = "var(--color-ink)", className }: IconProps) => (
+  <Stroke w={9.5} h={9.5} d="M0 9.5L0 7.5L7.5 0L9.5 2L2 9.5L0 9.5Z" color={color} width={1.3} round className={className} />
+);
+
+/** Tag menu: "Delete tag…" (10px trash can). */
+export const SmallTrashIcon = ({ color = "var(--color-danger)", className }: IconProps) => (
+  <Stroke
+    w={10}
+    h={9.5}
+    d="M0 1.5L10 1.5M3 1.5L3 0L7 0L7 1.5M1.5 1.5L2.2 9.5L7.8 9.5L8.5 1.5"
+    color={color}
+    width={1.3}
+    round
+    className={className}
+  />
+);
+
+/** "+ New tag" and "Create tag" (10px plus). */
+export const TinyPlusIcon = ({ color = "var(--color-ink)", className }: IconProps) => (
+  <Stroke w={10} h={10} d="M5 0L5 10M0 5L10 5" color={color} width={1.4} round className={className} />
+);
+
+/** A checked tag checkbox (9px check). */
+export const CheckIcon = ({ color = "var(--color-ink-inverse)", className }: IconProps) => (
+  <Stroke w={8.8} h={6.3} d="M0 3.3L3.1 6.3L8.8 0" color={color} width={1.8} round className={className} />
+);
+
+/** Remove a tag chip (7px ×). */
+export const TinyCloseIcon = ({ color = "var(--color-hint)", className }: IconProps) => (
+  <Stroke w={7} h={7} d="M0 0L7 7M7 0L0 7" color={color} width={1.3} round className={className} />
+);

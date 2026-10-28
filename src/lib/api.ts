@@ -22,6 +22,7 @@ import type {
   PermissionAnswer,
   RunEvent,
   SetupAnswer,
+  Tag,
 } from "./types";
 
 export interface Backend {
@@ -51,6 +52,14 @@ export interface Backend {
   updateBotConfig(botId: string, config: AgentConfig): Promise<Bot>;
   renameBot(botId: string, name: string): Promise<Bot>;
   runNow(botId: string): Promise<void>;
+  listTags(): Promise<Tag[]>;
+  /** With `botId`, the new tag also goes on that bot. */
+  createTag(name: string, botId?: string): Promise<Tag>;
+  renameTag(tagId: string, name: string): Promise<void>;
+  setTagColor(tagId: string, color: string): Promise<void>;
+  /** Deletes the tag and takes it off every bot. */
+  deleteTag(tagId: string): Promise<void>;
+  setBotTag(botId: string, tagId: string, on: boolean): Promise<void>;
   /** The chat on screen while the window is focused, else null; it is marked read. */
   setViewing(botId: string | null): Promise<void>;
   getAppSettings(): Promise<AppSettings>;
@@ -58,6 +67,8 @@ export interface Backend {
   /** Native folder picker; null when cancelled. */
   pickFolder(): Promise<string | null>;
   onBots(cb: (bots: Bot[]) => void): () => void;
+  /** All tags, after one is added, renamed, recolored or deleted (`kbot://tags`). */
+  onTags(cb: (tags: Tag[]) => void): () => void;
   onMessage(cb: (e: MessageEvent) => void): () => void;
   /** A bot's chat history was cleared (`kbot://cleared`). */
   onCleared(cb: (botId: string) => void): () => void;
@@ -100,6 +111,12 @@ const tauriBackend: Backend = {
   updateBotConfig: (botId, config) => invoke("update_bot_config", { botId, config }),
   renameBot: (botId, name) => invoke("rename_bot", { botId, name }),
   runNow: (botId) => invoke("run_now", { botId }),
+  listTags: () => invoke("list_tags"),
+  createTag: (name, botId) => invoke("create_tag", { name, botId: botId ?? null }),
+  renameTag: (tagId, name) => invoke("rename_tag", { tagId, name }),
+  setTagColor: (tagId, color) => invoke("set_tag_color", { tagId, color }),
+  deleteTag: (tagId) => invoke("delete_tag", { tagId }),
+  setBotTag: (botId, tagId, on) => invoke("set_bot_tag", { botId, tagId, on }),
   setViewing: (botId) => invoke("set_viewing", { botId }),
   getAppSettings: () => invoke("get_app_settings"),
   updateAppSettings: (settings) => invoke("update_app_settings", { settings }),
@@ -108,6 +125,7 @@ const tauriBackend: Backend = {
     return typeof picked === "string" ? picked : null;
   },
   onBots: (cb) => subscribe("kbot://bots", cb),
+  onTags: (cb) => subscribe("kbot://tags", cb),
   onMessage: (cb) => subscribe("kbot://message", cb),
   onCleared: (cb) => subscribe("kbot://cleared", cb),
   onRun: (cb) => subscribe("kbot://run", cb),

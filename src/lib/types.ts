@@ -84,7 +84,35 @@ export interface Bot {
   editing: boolean;
   /** A scheduled job posted a result or question the user hasn't seen. */
   unread: boolean;
+  /** Ids of the bot's tags, in the order they were added. */
+  tags: string[];
 }
+
+/** A label for grouping bots, shared by all of them. */
+export interface Tag {
+  id: string;
+  name: string;
+  /** One of `TAG_COLORS`. */
+  color: string;
+}
+
+/** Mirrors `Tag::COLORS`: the swatches in a tag's "Color" menu. */
+export const TAG_COLORS = [
+  "#141414",
+  "#9A5B34",
+  "#F0263E",
+  "#FF5A1F",
+  "#F7931E",
+  "#16B364",
+  "#12A89A",
+  "#1A73F0",
+  "#7C3AED",
+  "#EC2D8C",
+  "#8E8E8E",
+] as const;
+
+/** Mirrors `Tag::MAX_NAME`. */
+export const MAX_TAG_NAME = 30;
 
 export type SetupState = "pending" | "done" | "skipped";
 

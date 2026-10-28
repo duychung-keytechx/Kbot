@@ -19,12 +19,15 @@ import {
   INTERVAL_SCHEDULE,
   MAX_EVERY,
   MAX_NAME,
+  MAX_TAG_NAME,
   MIN_EVERY,
   type Message,
   type MessageBody,
   type MessageEvent,
   type PermissionAnswer,
   type RunEvent,
+  type Tag,
+  TAG_COLORS,
 } from "./types";
 
 type Step = "kind" | "description" | "schedule" | "web" | "workspace" | "clarify" | "review" | "edit";
@@ -66,6 +69,8 @@ const messageListeners = new Set<(e: MessageEvent) => void>();
 const runListeners = new Set<(e: RunEvent) => void>();
 const clearedListeners = new Set<(botId: string) => void>();
 const settingsListeners = new Set<(settings: AppSettings) => void>();
+const tags: Tag[] = [];
+const tagListeners = new Set<(tags: Tag[]) => void>();
 let appSettings: AppSettings = { ...DEFAULT_APP_SETTINGS };
 let viewing: string | null = null;
 
@@ -96,6 +101,22 @@ const bot = (botId: string) => {
   return b;
 };
 const emitBots = () => botListeners.forEach((cb) => cb(structuredClone(bots)));
+const sortedTags = () => structuredClone(tags).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+const emitTags = () => tagListeners.forEach((cb) => cb(sortedTags()));
+const tag = (tagId: string) => {
+  const t = tags.find((t) => t.id === tagId);
+  if (!t) throw new Error(`unknown tag ${tagId}`);
+  return t;
+};
+/** `Tag::clean_name` plus the store's case-insensitive UNIQUE. */
+function cleanTagName(name: string, except?: string) {
+  const clean = name.trim();
+  if (!clean) throw new Error("Tag name is required");
+  if (clean.length > MAX_TAG_NAME) throw new Error(`Tag name can be at most ${MAX_TAG_NAME} characters`);
+  if (tags.some((t) => t.id !== except && t.name.toLowerCase() === clean.toLowerCase()))
+    throw new Error(`A tag named “${clean}” already exists`);
+  return clean;
+}
 
 function emit(botId: string, message: Message) {
   messageListeners.forEach((cb) => cb({ botId, message: { ...message } }));
@@ -433,6 +454,7 @@ export const mockBackend: Backend = {
       lastRunAt: null,
       editing: false,
       unread: false,
+      tags: [],
     };
     bots.splice(bots.filter((b) => b.pinned).length, 0, b);
     conversations.set(b.id, []);
@@ -602,6 +624,42 @@ export const mockBackend: Backend = {
       emitBots();
     });
   },
+  listTags: async () => sortedTags(),
+  createTag: async (name, botId) => {
+    const used = tags.map((t) => t.color);
+    const color = TAG_COLORS.find((c) => !used.includes(c)) ?? TAG_COLORS[used.length % TAG_COLORS.length];
+    const t: Tag = { id: crypto.randomUUID(), name: cleanTagName(name), color };
+    if (botId) bot(botId);
+    tags.push(t);
+    emitTags();
+    if (botId) {
+      bot(botId).tags.push(t.id);
+      emitBots();
+    }
+    return { ...t };
+  },
+  renameTag: async (tagId, name) => {
+    tag(tagId).name = cleanTagName(name, tagId);
+    emitTags();
+  },
+  setTagColor: async (tagId, color) => {
+    if (!(TAG_COLORS as readonly string[]).includes(color)) throw new Error(`unknown tag color ${color}`);
+    tag(tagId).color = color;
+    emitTags();
+  },
+  deleteTag: async (tagId) => {
+    tags.splice(tags.indexOf(tag(tagId)), 1);
+    bots.forEach((b) => (b.tags = b.tags.filter((id) => id !== tagId)));
+    emitTags();
+    emitBots();
+  },
+  setBotTag: async (botId, tagId, on) => {
+    const b = bot(botId);
+    tag(tagId);
+    if (on === b.tags.includes(tagId)) return;
+    b.tags = on ? [...b.tags, tagId] : b.tags.filter((id) => id !== tagId);
+    emitBots();
+  },
   setViewing: async (botId) => {
     viewing = botId;
     if (botId && bot(botId).unread) {
@@ -622,6 +680,10 @@ export const mockBackend: Backend = {
   onBots: (cb) => {
     botListeners.add(cb);
     return () => botListeners.delete(cb);
+  },
+  onTags: (cb) => {
+    tagListeners.add(cb);
+    return () => tagListeners.delete(cb);
   },
   onMessage: (cb) => {
     messageListeners.add(cb);

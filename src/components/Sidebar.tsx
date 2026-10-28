@@ -2,10 +2,11 @@ import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, 
 import logo from "../assets/kbot-logo.png";
 import { backend } from "../lib/api";
 import { formatListTime } from "../lib/format";
-import type { Bot } from "../lib/types";
+import { useTags } from "../lib/hooks";
+import type { Bot, Tag } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { EditBotDialog } from "./EditBotDialog";
+import { EditBotDialog, TagDot } from "./EditBotDialog";
 import { describeSchedule } from "./fields";
 import { ClearIcon, ClockIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon } from "./Icons";
 import { WindowControls } from "./WindowControls";
@@ -24,12 +25,23 @@ export function Sidebar({
   onSelect: (id: string) => void;
   onNewBot: () => void;
 }) {
+  const tags = useTags();
   const [query, setQuery] = useState("");
+  // The tag chip picked under Search; forgotten if the tag is deleted.
+  const [tagId, setTagId] = useState<string>();
+  const filter = tags.find((t) => t.id === tagId);
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return bots;
-    return bots.filter((b) => b.name.toLowerCase().includes(q) || b.preview.toLowerCase().includes(q));
-  }, [bots, query]);
+    const names = new Map(tags.map((t) => [t.id, t.name.toLowerCase()]));
+    return bots.filter(
+      (b) =>
+        (!filter || b.tags.includes(filter.id)) &&
+        (!q ||
+          b.name.toLowerCase().includes(q) ||
+          b.preview.toLowerCase().includes(q) ||
+          b.tags.some((id) => names.get(id)?.includes(q))),
+    );
+  }, [bots, tags, query, filter]);
 
   const [width, setWidth] = useSidebarWidth();
 
@@ -63,6 +75,8 @@ export function Sidebar({
         />
       </label>
 
+      {tags.length > 0 && <TagFilter tags={tags} selected={filter?.id} onSelect={setTagId} />}
+
       <nav className="-mr-2 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pr-2">
         {visible.map((bot) => (
           <BotRow
@@ -75,6 +89,39 @@ export function Sidebar({
         ))}
       </nav>
     </aside>
+  );
+}
+
+/** Tag chips under Search; picking one shows only the bots with that tag. */
+function TagFilter({
+  tags,
+  selected,
+  onSelect,
+}: {
+  tags: Tag[];
+  selected: string | undefined;
+  onSelect: (id: string | undefined) => void;
+}) {
+  return (
+    <div role="group" aria-label="Filter by tag" className="-mt-1 flex flex-wrap gap-1.5 px-0.5">
+      {tags.map((tag) => {
+        const on = tag.id === selected;
+        return (
+          <button
+            key={tag.id}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onSelect(on ? undefined : tag.id)}
+            className={`flex max-w-full items-center gap-1.5 rounded-full border py-[3px] pr-2.5 pl-2 text-[12px] ${
+              on ? "border-ink bg-ink text-ink-inverse" : "border-field-line bg-surface text-ink hover:bg-row-hover"
+            }`}
+          >
+            <TagDot color={tag.color} size={7} />
+            <span className="truncate">{tag.name}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

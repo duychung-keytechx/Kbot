@@ -4,10 +4,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::claude::ClaudeStatus;
 use crate::codex::CodexStatus;
-use crate::models::{AppSettings, Message, MessageEvent, RunEvent};
+use crate::models::{AppSettings, Message, MessageEvent, RunEvent, Tag};
 use crate::AppState;
 
 pub const BOTS_CHANGED: &str = "kbot://bots";
+pub const TAGS: &str = "kbot://tags";
 pub const MESSAGE: &str = "kbot://message";
 pub const RUN: &str = "kbot://run";
 pub const CLAUDE: &str = "kbot://claude";
@@ -35,6 +36,11 @@ pub fn bots_changed(app: &AppHandle) {
         let _ = window.set_badge_count((unread > 0).then_some(unread));
     }
     let _ = app.emit(BOTS_CHANGED, bots);
+}
+
+/// Tags were added, renamed, recolored or deleted; the payload is all of them.
+pub fn tags_changed(app: &AppHandle, tags: Vec<Tag>) {
+    let _ = app.emit(TAGS, tags);
 }
 
 /// A bot's chat history was deleted; the payload is its id.

@@ -8,7 +8,7 @@ use crate::codex::{self, CodexModels, CodexStatus};
 use crate::events;
 use crate::models::{
     AgentConfig, AppSettings, Avatar, Bot, BotImage, Control, Message, MessageBody, PermissionAnswer, PermissionStatus, SetupAnswer,
-    SetupState,
+    SetupState, Tag,
 };
 use crate::setup;
 use crate::AppState;
@@ -46,6 +46,7 @@ pub fn create_bot(
         last_run_at: None,
         editing: false,
         unread: false,
+        tags: Vec::new(),
     };
     state.store.lock().unwrap().insert_bot(bot.clone())?;
     events::bots_changed(&app);
@@ -308,6 +309,75 @@ pub fn rename_bot(app: AppHandle, state: State<AppState>, bot_id: String, name: 
     };
     events::bots_changed(&app);
     Ok(bot)
+}
+
+#[tauri::command]
+pub fn list_tags(state: State<AppState>) -> Vec<Tag> {
+    state.store.lock().unwrap().tags()
+}
+
+/// "+ New tag", or Enter in a bot's tag field (with `bot_id`, which also gets the tag).
+#[tauri::command]
+pub fn create_tag(app: AppHandle, state: State<AppState>, name: String, bot_id: Option<String>) -> CmdResult<Tag> {
+    let name = Tag::clean_name(&name)?;
+    let (tag, tags) = {
+        let store = state.store.lock().unwrap();
+        let tag = store.insert_tag(&name)?;
+        if let Some(bot_id) = &bot_id {
+            store.set_bot_tag(bot_id, &tag.id, true)?;
+        }
+        (tag, store.tags())
+    };
+    events::tags_changed(&app, tags);
+    if bot_id.is_some() {
+        events::bots_changed(&app);
+    }
+    Ok(tag)
+}
+
+#[tauri::command]
+pub fn rename_tag(app: AppHandle, state: State<AppState>, tag_id: String, name: String) -> CmdResult<()> {
+    let name = Tag::clean_name(&name)?;
+    let tags = {
+        let store = state.store.lock().unwrap();
+        store.rename_tag(&tag_id, &name)?;
+        store.tags()
+    };
+    events::tags_changed(&app, tags);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_tag_color(app: AppHandle, state: State<AppState>, tag_id: String, color: String) -> CmdResult<()> {
+    let tags = {
+        let store = state.store.lock().unwrap();
+        store.set_tag_color(&tag_id, &color)?;
+        store.tags()
+    };
+    events::tags_changed(&app, tags);
+    Ok(())
+}
+
+/// "Delete tag…": takes it off every bot too.
+#[tauri::command]
+pub fn delete_tag(app: AppHandle, state: State<AppState>, tag_id: String) -> CmdResult<()> {
+    let tags = {
+        let store = state.store.lock().unwrap();
+        store.delete_tag(&tag_id)?;
+        store.tags()
+    };
+    events::tags_changed(&app, tags);
+    events::bots_changed(&app);
+    Ok(())
+}
+
+/// Checks or unchecks a tag for a bot.
+#[tauri::command]
+pub fn set_bot_tag(app: AppHandle, state: State<AppState>, bot_id: String, tag_id: String, on: bool) -> CmdResult<()> {
+    if state.store.lock().unwrap().set_bot_tag(&bot_id, &tag_id, on)? {
+        events::bots_changed(&app);
+    }
+    Ok(())
 }
 
 /// "Run now" in Settings.

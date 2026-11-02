@@ -23,6 +23,18 @@ pub enum Trigger {
     /// The bot's scheduled job; `manual` = "Run now" rather than the scheduler,
     /// `late` = when a missed one-time task was due ("today at 09:30").
     Job { manual: bool, late: Option<String> },
+    /// A task from the bot's team orchestrator (see `teams.rs`), sent as is.
+    Task(String),
+}
+
+/// How a run went, for a team task waiting on it.
+#[derive(Debug, Default)]
+pub struct Outcome {
+    /// The last complete reply.
+    pub text: String,
+    pub stopped: bool,
+    /// The CLI reported an error or quit unexpectedly.
+    pub failed: bool,
 }
 
 /// Appends a message to a bot's chat and tells the UI.
@@ -109,7 +121,19 @@ pub fn spawn(app: AppHandle, ticket: Ticket, trigger: Trigger) {
     });
 }
 
-async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), String> {
+/// Runs one turn of `ticket.bot_id` and waits for it; errors are posted to
+/// the bot's chat like any reply.
+pub async fn run_turn(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Outcome {
+    match run(app, ticket, trigger).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            post(app, &ticket.bot_id, MessageBody::System { text: err });
+            Outcome { failed: true, ..Outcome::default() }
+        }
+    }
+}
+
+async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<Outcome, String> {
     let bot_id = ticket.bot_id.as_str();
     let state = app.state::<AppState>();
     let bot = state.store.lock().unwrap().bot(bot_id)?;
@@ -197,7 +221,7 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         if job && !stopped {
             mark_unread(app, bot_id);
         }
-        return Ok(());
+        return Ok(Outcome { text: reply.text, stopped, failed: reply.failed });
     }
 }
 
@@ -543,6 +567,7 @@ where
     let body = match trigger {
         Trigger::UserMessage(text) => text.clone(),
         Trigger::ComputerHandback => "I'm done. You have control again.".into(),
+        Trigger::Task(text) => text.clone(),
         Trigger::Job { late, .. } => {
             let task = config.schedule.as_ref().map(|s| s.task.trim()).unwrap_or_default();
             let task = if task.is_empty() { config.description.trim() } else { task };
@@ -636,6 +661,8 @@ mod tests {
             editing: false,
             unread: false,
             tags: Vec::new(),
+            team_id: None,
+            team_role: String::new(),
         }
     }
 

@@ -11,7 +11,8 @@ use serde::de::DeserializeOwned;
 
 use crate::migrate;
 use crate::models::{
-    AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Message, MessageBody, Provider, SetupState, Tag,
+    AgentConfig, AppSettings, Avatar, Bot, DEFAULT_MODEL, Flow, Message, MessageBody, Provider, SetupState, Tag, Team,
+    TeamMode,
 };
 use crate::setup::Step;
 
@@ -24,6 +25,13 @@ const BOTS: &str = "SELECT bots.*,
         (SELECT json_group_array(tag_id)
          FROM (SELECT tag_id FROM bot_tags WHERE bot_id = bots.id ORDER BY added_at, rowid)) AS tag_ids
     FROM bots";
+
+/// `teams` plus `member_ids`, its members (not the lead) as a JSON array in order.
+const TEAMS: &str = "SELECT teams.*,
+        (SELECT json_group_array(id)
+         FROM (SELECT id FROM bots WHERE team_id = teams.id AND id != teams.lead_id
+               ORDER BY team_order, created_at, rowid)) AS member_ids
+    FROM teams";
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -82,6 +90,28 @@ fn bot_from_row(row: &Row) -> rusqlite::Result<Bot> {
         editing: setup_state == SetupState::Done && row.get::<_, Option<String>>("setup_step")?.is_some(),
         unread: row.get("unread")?,
         tags: from_json(row, "tag_ids")?,
+        team_id: row.get("team_id")?,
+        team_role: row.get("team_role")?,
+    })
+}
+
+fn team_from_row(row: &Row) -> rusqlite::Result<Team> {
+    // A flow that no longer parses (e.g. from a newer version) is dropped, not fatal.
+    let flow: Flow = serde_json::from_str(&row.get::<_, String>("flow")?).unwrap_or_default();
+    Ok(Team {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        purpose: row.get("purpose")?,
+        color: row.get("color")?,
+        lead_id: row.get("lead_id")?,
+        mode: from_text(row, "mode")?,
+        flow,
+        collapsed: row.get("collapsed")?,
+        updated_at: row.get("updated_at")?,
+        preview: row.get("preview")?,
+        unread: row.get("unread")?,
+        members: from_json(row, "member_ids")?,
+        activity: None,
     })
 }
 
@@ -216,16 +246,23 @@ impl Store {
         let tx = self.conn.transaction().map_err(err)?;
         let preview = match &message.body {
             MessageBody::User { text } | MessageBody::Agent { text } => Some(text.clone()),
+            MessageBody::Member { name, text, .. } => Some(format!("{name}: {text}")),
+            MessageBody::Brief { from, text, .. } => Some(format!("{from}: {text}")),
             MessageBody::Permission { questions, .. } if !questions.is_empty() => Some(questions[0].question.clone()),
             MessageBody::Permission { tool, .. } => Some(format!("Wants to use {tool}. Approve?")),
             _ => None,
         };
-        let updated = tx
-            .execute(
-                "UPDATE bots SET updated_at = ?2, preview = COALESCE(?3, preview) WHERE id = ?1",
-                params![bot_id, message.created_at, preview],
-            )
-            .map_err(err)?;
+        let mut updated = 0;
+        for table in ["bots", "teams"] {
+            if updated == 0 {
+                updated = tx
+                    .execute(
+                        &format!("UPDATE {table} SET updated_at = ?2, preview = COALESCE(?3, preview) WHERE id = ?1"),
+                        params![bot_id, message.created_at, preview],
+                    )
+                    .map_err(err)?;
+            }
+        }
         if updated == 0 {
             return Err(format!("unknown bot {bot_id}"));
         }
@@ -263,6 +300,7 @@ impl Store {
         // A streamed agent reply grows after it was pushed; keep the preview in step.
         if let MessageBody::Agent { text } = &message.body {
             tx.execute("UPDATE bots SET preview = ?2 WHERE id = ?1", params![bot_id, text]).map_err(err)?;
+            tx.execute("UPDATE teams SET preview = ?2 WHERE id = ?1", params![bot_id, text]).map_err(err)?;
         }
         tx.commit().map_err(err)?;
         Ok(message)
@@ -274,7 +312,8 @@ impl Store {
         let tx = self.conn.transaction().map_err(err)?;
         let updated = tx
             .execute("UPDATE bots SET preview = '', claude_session_id = NULL, codex_session_id = NULL WHERE id = ?1", params![bot_id])
-            .map_err(err)?;
+            .map_err(err)?
+            + tx.execute("UPDATE teams SET preview = '' WHERE id = ?1", params![bot_id]).map_err(err)?;
         if updated == 0 {
             return Err(format!("unknown bot {bot_id}"));
         }
@@ -282,7 +321,7 @@ impl Store {
         tx.commit().map_err(err)
     }
 
-    /// Deletes a bot; its messages go with it (`ON DELETE CASCADE`).
+    /// Deletes a bot; its messages go with it (trigger `bots_delete_messages`).
     pub fn delete_bot(&mut self, bot_id: &str) -> Result<(), String> {
         match self.conn.execute("DELETE FROM bots WHERE id = ?1", params![bot_id]).map_err(err)? {
             0 => Err(format!("unknown bot {bot_id}")),
@@ -428,6 +467,137 @@ impl Store {
         })
     }
 
+    /// Teams, newest activity first.
+    pub fn teams(&self) -> Vec<Team> {
+        let query = || -> rusqlite::Result<Vec<Team>> {
+            self.conn
+                .prepare_cached(&format!("{TEAMS} ORDER BY updated_at DESC, rowid DESC"))?
+                .query_map([], team_from_row)?
+                .collect()
+        };
+        query().unwrap_or_else(|e| {
+            eprintln!("list teams failed: {e}");
+            Vec::new()
+        })
+    }
+
+    pub fn team(&self, team_id: &str) -> Result<Team, String> {
+        self.conn
+            .query_row(&format!("{TEAMS} WHERE id = ?1"), [team_id], team_from_row)
+            .optional()
+            .map_err(err)?
+            .ok_or_else(|| format!("unknown team {team_id}"))
+    }
+
+    /// Adds `team`; its lead must already be a bot, and joins it.
+    pub fn insert_team(&mut self, team: &Team) -> Result<(), String> {
+        let tx = self.conn.transaction().map_err(err)?;
+        tx.execute(
+            "INSERT INTO teams (id, name, purpose, color, lead_id, mode, flow, collapsed, created_at, updated_at, preview)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
+            params![
+                team.id,
+                team.name,
+                team.purpose,
+                team.color,
+                team.lead_id,
+                to_text(&team.mode),
+                serde_json::to_string(&team.flow).map_err(err)?,
+                team.collapsed,
+                team.updated_at,
+                team.preview,
+            ],
+        )
+        .map_err(err)?;
+        tx.execute("UPDATE bots SET team_id = ?2, team_order = 0 WHERE id = ?1", params![team.lead_id, team.id])
+            .map_err(err)?;
+        tx.commit().map_err(err)
+    }
+
+    /// Runs `UPDATE teams SET <assignments> WHERE id = ?1` and fails on an unknown team.
+    fn update_team(&self, team_id: &str, assignments: &str, values: &[&dyn rusqlite::ToSql]) -> Result<(), String> {
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&team_id];
+        params.extend_from_slice(values);
+        let sql = format!("UPDATE teams SET {assignments} WHERE id = ?1");
+        match self.conn.execute(&sql, params.as_slice()).map_err(err)? {
+            0 => Err(format!("unknown team {team_id}")),
+            _ => Ok(()),
+        }
+    }
+
+    /// Saves the name, purpose, color, mode and flow of "Team settings".
+    pub fn set_team_info(&self, team: &Team) -> Result<(), String> {
+        let flow = serde_json::to_string(&team.flow).map_err(err)?;
+        self.update_team(
+            &team.id,
+            "name = ?2, purpose = ?3, color = ?4, mode = ?5, flow = ?6",
+            &[&team.name, &team.purpose, &team.color, &to_text(&team.mode), &flow],
+        )
+    }
+
+    pub fn set_team_flow(&self, team_id: &str, mode: TeamMode, flow: &Flow) -> Result<(), String> {
+        let flow = serde_json::to_string(flow).map_err(err)?;
+        self.update_team(team_id, "mode = ?2, flow = ?3", &[&to_text(&mode), &flow])
+    }
+
+    pub fn set_team_collapsed(&self, team_id: &str, collapsed: bool) -> Result<(), String> {
+        self.update_team(team_id, "collapsed = ?2", &[&collapsed])
+    }
+
+    pub fn set_team_lead(&self, team_id: &str, lead_id: &str) -> Result<(), String> {
+        self.update_team(team_id, "lead_id = ?2", &[&lead_id])
+    }
+
+    /// Returns whether the flag changed.
+    pub fn set_team_unread(&self, team_id: &str, unread: bool) -> Result<bool, String> {
+        self.conn
+            .execute("UPDATE teams SET unread = ?2 WHERE id = ?1 AND unread != ?2", params![team_id, unread])
+            .map(|n| n > 0)
+            .map_err(err)
+    }
+
+    /// Puts a bot in a team (last in order), moving it out of any other, or
+    /// takes it out (`None`).
+    pub fn set_bot_team(&self, bot_id: &str, team_id: Option<&str>) -> Result<(), String> {
+        let order: i64 = match team_id {
+            Some(team_id) => self
+                .conn
+                .query_row("SELECT COALESCE(MAX(team_order), 0) + 1 FROM bots WHERE team_id = ?1", [team_id], |r| r.get(0))
+                .map_err(err)?,
+            None => 0,
+        };
+        self.update_bot(bot_id, "team_id = ?2, team_order = ?3", &[&team_id, &order])
+    }
+
+    pub fn set_team_role(&self, bot_id: &str, role: &str) -> Result<(), String> {
+        self.update_bot(bot_id, "team_role = ?2", &[&role])
+    }
+
+    /// The team's bots, lead included, in order.
+    pub fn team_bots(&self, team_id: &str) -> Vec<Bot> {
+        let sql = format!("{BOTS} WHERE team_id = ?1 ORDER BY team_order, created_at, rowid");
+        let query = || -> rusqlite::Result<Vec<Bot>> {
+            self.conn.prepare_cached(&sql)?.query_map([team_id], bot_from_row)?.collect()
+        };
+        query().unwrap_or_else(|e| {
+            eprintln!("list team bots failed: {e}");
+            Vec::new()
+        })
+    }
+
+    /// Disbands a team: its bots leave it, and the team chat moves into
+    /// `archive_to`'s chat (the orchestrator's) so it isn't lost.
+    pub fn delete_team(&mut self, team_id: &str, archive_to: &str) -> Result<(), String> {
+        let tx = self.conn.transaction().map_err(err)?;
+        tx.execute("UPDATE messages SET bot_id = ?2 WHERE bot_id = ?1", params![team_id, archive_to]).map_err(err)?;
+        tx.execute("UPDATE bots SET team_id = NULL, team_order = 0 WHERE team_id = ?1", [team_id]).map_err(err)?;
+        let deleted = tx.execute("DELETE FROM teams WHERE id = ?1", [team_id]).map_err(err)?;
+        if deleted == 0 {
+            return Err(format!("unknown team {team_id}"));
+        }
+        tx.commit().map_err(err)
+    }
+
     pub fn app_setting(&self, key: &str) -> Option<String> {
         self.conn
             .query_row("SELECT value FROM app_settings WHERE key = ?1", [key], |r| r.get(0))
@@ -492,6 +662,8 @@ mod tests {
             editing: false,
             unread: false,
             tags: Vec::new(),
+            team_id: None,
+            team_role: String::new(),
         }
     }
 
@@ -762,5 +934,86 @@ mod tests {
         store.set_setup("a", SetupState::Done, Some(&Step::Edit { draft: config.clone(), name: None })).unwrap();
         assert!(store.bot("a").unwrap().editing);
         assert!(store.set_config("missing", &config).is_err());
+    }
+
+    fn team(id: &str, lead: &str) -> Team {
+        Team {
+            id: id.into(),
+            name: format!("Team {id}"),
+            purpose: "Sell".into(),
+            color: "#1A73F0".into(),
+            lead_id: lead.into(),
+            mode: TeamMode::Auto,
+            flow: Flow::default(),
+            collapsed: false,
+            updated_at: 5,
+            preview: String::new(),
+            unread: false,
+            members: Vec::new(),
+            activity: None,
+        }
+    }
+
+    #[test]
+    fn teams_round_trip_with_members_in_order() {
+        let mut store = Store::open_in_memory().unwrap();
+        for id in ["lead", "a", "b", "c"] {
+            store.insert_bot(bot(id, 1)).unwrap();
+        }
+        store.insert_team(&team("t", "lead")).unwrap();
+        store.set_bot_team("b", Some("t")).unwrap();
+        store.set_bot_team("a", Some("t")).unwrap();
+        store.set_team_role("a", "Researches").unwrap();
+        let saved = store.team("t").unwrap();
+        assert_eq!(saved.members, vec!["b".to_string(), "a".to_string()]);
+        assert_eq!(saved.mode, TeamMode::Auto);
+        assert_eq!(store.bot("lead").unwrap().team_id.as_deref(), Some("t"));
+        assert_eq!(store.bot("a").unwrap().team_role, "Researches");
+        assert_eq!(store.team_bots("t").iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["lead", "b", "a"]);
+
+        let flow = Flow {
+            nodes: vec![crate::models::FlowNode { id: "n".into(), member_id: "a".into(), ..Default::default() }],
+            skip_unneeded: true,
+        };
+        store.set_team_flow("t", TeamMode::Flow, &flow).unwrap();
+        let saved = store.team("t").unwrap();
+        assert_eq!(saved.mode, TeamMode::Flow);
+        assert_eq!(saved.flow, flow);
+
+        store.set_bot_team("b", None).unwrap();
+        assert_eq!(store.team("t").unwrap().members, vec!["a".to_string()]);
+        assert!(store.set_team_unread("t", true).unwrap());
+        assert!(!store.set_team_unread("t", true).unwrap());
+    }
+
+    #[test]
+    fn team_chat_updates_the_team_and_moves_on_disband() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("lead", 1)).unwrap();
+        store.insert_bot(bot("a", 1)).unwrap();
+        store.insert_team(&team("t", "lead")).unwrap();
+        store.set_bot_team("a", Some("t")).unwrap();
+        store.push_message("t", Message::new(MessageBody::User { text: "find leads".into() })).unwrap();
+        store
+            .push_message("t", Message::new(MessageBody::Member { bot_id: "a".into(), name: "A".into(), text: "done".into() }))
+            .unwrap();
+        assert_eq!(store.team("t").unwrap().preview, "A: done");
+        assert_eq!(store.messages("t").len(), 2);
+        assert!(store.push_message("nobody", Message::new(MessageBody::User { text: "x".into() })).is_err());
+
+        store.delete_team("t", "lead").unwrap();
+        assert!(store.team("t").is_err());
+        assert_eq!(store.messages("lead").len(), 2);
+        assert!(store.bot("a").unwrap().team_id.is_none());
+        assert!(store.bot("lead").unwrap().team_id.is_none());
+    }
+
+    #[test]
+    fn deleting_a_bot_deletes_its_messages() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.insert_bot(bot("a", 1)).unwrap();
+        store.push_message("a", Message::new(MessageBody::User { text: "hi".into() })).unwrap();
+        store.delete_bot("a").unwrap();
+        assert!(store.messages("a").is_empty());
     }
 }

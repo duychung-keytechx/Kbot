@@ -196,7 +196,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
   );
 }
 
-function NavItem({
+export function NavItem({
   active,
   icon,
   onClick,
@@ -224,7 +224,7 @@ function NavItem({
 }
 
 /** The scrolling part of a tab: its title and close button, then `children`. */
-function Body({
+export function Body({
   title,
   subtitle,
   onClose,
@@ -258,7 +258,7 @@ function Body({
   );
 }
 
-function Footer({ status, children }: { status: ReactNode; children: ReactNode }) {
+export function Footer({ status, children }: { status: ReactNode; children: ReactNode }) {
   return (
     <div className="flex shrink-0 items-center justify-between gap-2.5 border-t border-divider pt-3.5 pr-4 pb-4 pl-8">
       <p className="flex items-center gap-1.5 text-[12px] text-hint">{status}</p>
@@ -267,7 +267,7 @@ function Footer({ status, children }: { status: ReactNode; children: ReactNode }
   );
 }
 
-function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: string; children: ReactNode }) {
+export function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={htmlFor} className="text-[13px] text-subtle">
@@ -280,7 +280,7 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: st
 }
 
 /** The "Tags" tab. Every change is saved right away. */
-function TagsTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
+export function TagsTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const tags = useTags();
   const bots = useBots();
   const [error, setError] = useState<string>();

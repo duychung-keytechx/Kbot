@@ -19,10 +19,15 @@ import type {
   Control,
   Message,
   MessageEvent,
+  NewTeam,
   PermissionAnswer,
+  PlanEdit,
   RunEvent,
   SetupAnswer,
   Tag,
+  TaskAction,
+  Team,
+  TeamInfo,
 } from "./types";
 
 export interface Backend {
@@ -64,9 +69,28 @@ export interface Backend {
   setViewing(botId: string | null): Promise<void>;
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(settings: AppSettings): Promise<AppSettings>;
+  listTeams(): Promise<Team[]>;
+  createTeam(team: NewTeam): Promise<Team>;
+  updateTeam(teamId: string, info: TeamInfo): Promise<Team>;
+  setTeamCollapsed(teamId: string, collapsed: boolean): Promise<void>;
+  /** "Add existing bot" / "Move to team ›": moves it from another team. */
+  addTeamMember(teamId: string, botId: string, role?: string): Promise<Team>;
+  createTeamMember(teamId: string, name: string, image: BotImage, role: string): Promise<Bot>;
+  setMemberRole(botId: string, role: string): Promise<void>;
+  removeTeamMember(teamId: string, botId: string): Promise<Team>;
+  makeLead(teamId: string, botId: string): Promise<Team>;
+  /** Members become bots of their own; the team chat moves to the orchestrator's chat. */
+  disbandTeam(teamId: string): Promise<void>;
+  /** With `memberId`, an @mention that one member answers. */
+  sendTeamMessage(teamId: string, text: string, memberId?: string): Promise<Message>;
+  pauseTeam(teamId: string, paused: boolean): Promise<void>;
+  editTeamPlan(teamId: string, edits: PlanEdit[]): Promise<void>;
+  answerTeamTask(teamId: string, taskId: string, action: TaskAction): Promise<void>;
   /** Native folder picker; null when cancelled. */
   pickFolder(): Promise<string | null>;
   onBots(cb: (bots: Bot[]) => void): () => void;
+  /** All teams, with what running ones are doing (`kbot://teams`). */
+  onTeams(cb: (teams: Team[]) => void): () => void;
   /** All tags, after one is added, renamed, recolored or deleted (`kbot://tags`). */
   onTags(cb: (tags: Tag[]) => void): () => void;
   onMessage(cb: (e: MessageEvent) => void): () => void;
@@ -120,11 +144,26 @@ const tauriBackend: Backend = {
   setViewing: (botId) => invoke("set_viewing", { botId }),
   getAppSettings: () => invoke("get_app_settings"),
   updateAppSettings: (settings) => invoke("update_app_settings", { settings }),
+  listTeams: () => invoke("list_teams"),
+  createTeam: (team) => invoke("create_team", { team }),
+  updateTeam: (teamId, info) => invoke("update_team", { teamId, info }),
+  setTeamCollapsed: (teamId, collapsed) => invoke("set_team_collapsed", { teamId, collapsed }),
+  addTeamMember: (teamId, botId, role) => invoke("add_team_member", { teamId, botId, role: role ?? null }),
+  createTeamMember: (teamId, name, image, role) => invoke("create_team_member", { teamId, name, image, role }),
+  setMemberRole: (botId, role) => invoke("set_member_role", { botId, role }),
+  removeTeamMember: (teamId, botId) => invoke("remove_team_member", { teamId, botId }),
+  makeLead: (teamId, botId) => invoke("make_lead", { teamId, botId }),
+  disbandTeam: (teamId) => invoke("disband_team", { teamId }),
+  sendTeamMessage: (teamId, text, memberId) => invoke("send_team_message", { teamId, text, memberId: memberId ?? null }),
+  pauseTeam: (teamId, paused) => invoke("pause_team", { teamId, paused }),
+  editTeamPlan: (teamId, edits) => invoke("edit_team_plan", { teamId, edits }),
+  answerTeamTask: (teamId, taskId, action) => invoke("answer_team_task", { teamId, taskId, action }),
   pickFolder: async () => {
     const picked = await open({ directory: true, multiple: false });
     return typeof picked === "string" ? picked : null;
   },
   onBots: (cb) => subscribe("kbot://bots", cb),
+  onTeams: (cb) => subscribe("kbot://teams", cb),
   onTags: (cb) => subscribe("kbot://tags", cb),
   onMessage: (cb) => subscribe("kbot://message", cb),
   onCleared: (cb) => subscribe("kbot://cleared", cb),

@@ -71,6 +71,19 @@
   --color-checkbox-line: #cfcfcd;
   /* Rings tag dots so the darkest swatch shows on a dark surface. */
   --color-tag-ring: transparent;
+
+  /* Agent teams (design/Kbot_agentteam_*.html) */
+  --color-brief-bg: #fff1e8;
+  --color-brief-line: #f8d9c4;
+  --color-brief-ink: #8a4b17;
+  --color-banner-bg: #fff6ef;
+  --color-banner-line: #f6e2d2;
+  --color-working: #f08c2e;
+  --color-working-ink: #b5601a;
+  --color-done: #12a150;
+  --color-waiting: #b0b0ae;
+  --color-crown: #f5b83d;
+  --color-thread-line: #dededc;
 }
 
 /* Kbot > Settings… > Theme > Dark (see src/lib/theme.ts). */
@@ -125,6 +138,17 @@
   --color-row-open: #2b2b29;
   --color-checkbox-line: #5a5a58;
   --color-tag-ring: rgb(255 255 255 / 0.28);
+  --color-brief-bg: #3a2a1f;
+  --color-brief-line: #57402e;
+  --color-brief-ink: #f0b07a;
+  --color-banner-bg: #2c241d;
+  --color-banner-line: #3f3226;
+  --color-working: #f29a48;
+  --color-working-ink: #f0a868;
+  --color-done: #2fb37b;
+  --color-waiting: #6f6f6c;
+  --color-crown: #f5b83d;
+  --color-thread-line: #3a3a38;
   /* `tag-tint` on a dark surface: a stronger tint over a lifted gray, lighter text. */
   --tag-fill: 26%;
   --tag-fill-base: #454543;

@@ -293,7 +293,16 @@ export interface AgentConfig {
   model: string | null;
   /** Codex `--model`; null = `AppSettings.codexModel`. */
   codexModel: string | null;
+  /**
+   * "MCP servers & tools": run with the user's own CLI setup (settings,
+   * CLAUDE.md, hooks, plugins, MCP servers, Claude in Chrome).
+   */
+  extendedTools: boolean;
 }
+
+/** What the "MCP servers & tools" switch does, under its label. */
+export const EXTENDED_TOOLS_HINT =
+  "Use your own Claude Code setup: MCP servers like JIRA, Claude in Chrome, skills and plugins";
 
 /** Mirrors `Bot::MAX_NAME`. */
 export const MAX_NAME = 60;
@@ -363,6 +372,7 @@ export const EMPTY_CONFIG: AgentConfig = {
   webAccess: false,
   model: null,
   codexModel: null,
+  extendedTools: false,
 };
 
 export type Control = "user" | "agent";

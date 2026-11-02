@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { backend, errorText } from "../lib/api";
 import { useBots, useTags } from "../lib/hooks";
-import { type AgentConfig, type Bot, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
+import { type AgentConfig, type Bot, EXTENDED_TOOLS_HINT, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { FolderList, Switch } from "./fields";
 import {
@@ -17,13 +17,14 @@ import {
 import { TagDot, tagStyle, tagsOf } from "./tags";
 
 /** The parts of `AgentConfig` that "Edit" in a bot's menu changes. */
-type Draft = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess">;
+type Draft = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess" | "extendedTools">;
 
-const draftOf = ({ description, instructions, workspaceFolders, webAccess }: AgentConfig): Draft => ({
+const draftOf = ({ description, instructions, workspaceFolders, webAccess, extendedTools }: AgentConfig): Draft => ({
   description,
   instructions,
   workspaceFolders,
   webAccess,
+  extendedTools,
 });
 
 type Tab = "info" | "tags";
@@ -43,7 +44,7 @@ const usageText = (n: number) => (n === 0 ? "Unused" : n === 1 ? "1 bot" : `${n}
 
 /**
  * "Edit" in a bot's menu. "Agent Info" changes its name, description,
- * instructions, folders and web search, kept until Save; "Tags" saves as you go.
+ * instructions, folders, web search and MCP servers & tools, kept until Save; "Tags" saves as you go.
  */
 export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("info");
@@ -163,6 +164,14 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
                   <span className="flex flex-col gap-0.5">
                     <span className="text-[14px] text-ink">Search the web</span>
                     <span className="text-[12px] text-hint">Let the bot look things up online</span>
+                  </span>
+                </Switch>
+              </div>
+              <div className="rounded-xl border border-modal-line py-0.5 pr-3.5 pl-4">
+                <Switch checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-[14px] text-ink">MCP servers &amp; tools</span>
+                    <span className="text-[12px] text-hint">{EXTENDED_TOOLS_HINT}</span>
                   </span>
                 </Switch>
               </div>

@@ -446,6 +446,11 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Codex `--model` value; `None` = `AppSettings::codex_model`.
     pub codex_model: Option<String>,
+    /// Runs the CLI the way the user's own does: their settings, CLAUDE.md,
+    /// hooks, plugins and MCP servers, and Claude in Chrome. A team lead
+    /// also gets its tools when planning and reviewing. Off by default:
+    /// bots run isolated.
+    pub extended_tools: bool,
 }
 
 /// Claude Code `--model` for bots that don't pick their own.

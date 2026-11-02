@@ -313,10 +313,13 @@ pub fn args(spec: &RunSpec, schema_file: Option<&Path>) -> Vec<String> {
     config("developer_instructions", Value::String(spec.system_prompt.clone()).to_string());
     // Only the model and provider come from the user's config: no MCP
     // servers, plugins, hooks or notifications, so bots behave the same on
-    // either provider.
-    config("mcp_servers", "{}".into());
-    config("plugins", "{}".into());
-    config("notify", "[]".into());
+    // either provider. A bot with MCP servers & tools on gets the user's
+    // whole Codex setup instead.
+    if !spec.extended_tools {
+        config("mcp_servers", "{}".into());
+        config("plugins", "{}".into());
+        config("notify", "[]".into());
+    }
     let web = matches!(&spec.tools, Tools::AllExcept(except) if !except.contains(&"WebSearch"));
     config("web_search", if web { "\"live\"" } else { "\"disabled\"" }.into());
     if let Some(effort) = spec.effort {
@@ -324,8 +327,10 @@ pub fn args(spec: &RunSpec, schema_file: Option<&Path>) -> Vec<String> {
     }
     let sandbox = if spec.tools == Tools::None { "read-only" } else { "danger-full-access" };
     args.extend(["-s".into(), sandbox.into()]);
-    for feature in ["plugins", "apps", "hooks", "skill_search", "tool_suggest", "browser_use", "computer_use"] {
-        args.extend(["--disable".into(), feature.into()]);
+    if !spec.extended_tools {
+        for feature in ["plugins", "apps", "hooks", "skill_search", "tool_suggest", "browser_use", "computer_use"] {
+            args.extend(["--disable".into(), feature.into()]);
+        }
     }
     if let Some(model) = &spec.model {
         args.extend(["-m".into(), model.clone()]);
@@ -493,10 +498,11 @@ async fn run_process(
     Ok(Exit::Finished { success: status.success(), stderr })
 }
 
-/// One-off structured call (`--output-schema`) in a read-only sandbox with
-/// no saved session. Returns the final answer parsed as JSON.
+/// One-off structured call (`--output-schema`) with no saved session, in a
+/// read-only sandbox unless `spec.tools` gives tools. Returns the final
+/// answer parsed as JSON.
 pub async fn ask_json(app: &AppHandle, bin: &Path, spec: RunSpec, cancel: Arc<Notify>) -> Result<Value, String> {
-    let spec = RunSpec { session: Session::Ephemeral, tools: Tools::None, ..spec };
+    let spec = RunSpec { session: Session::Ephemeral, ..spec };
     let mut answer = None;
     let mut error = None;
     let exit = run(app, bin, &spec, cancel, |event| {
@@ -535,6 +541,7 @@ mod tests {
             effort: Some(Effort::High),
             json_schema: None,
             cwd: PathBuf::from("/tmp"),
+            extended_tools: false,
         }
     }
 
@@ -613,6 +620,12 @@ model = "not-top-level"
         assert!(joined.contains(r#"web_search="live""#));
         assert!(joined.ends_with("|resume|t1|-"));
         assert!(!joined.contains("-m|") && !joined.contains("model_reasoning_effort"));
+
+        // MCP servers & tools: the user's own Codex setup.
+        spec.extended_tools = true;
+        let joined = args(&spec, None).join("|");
+        assert!(!joined.contains("mcp_servers") && !joined.contains("--disable|"));
+        spec.extended_tools = false;
 
         spec.tools = Tools::None;
         spec.session = Session::Ephemeral;

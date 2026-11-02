@@ -602,7 +602,13 @@ impl Run {
             "" => "Split each request into tasks, give each task to the best member, run independent tasks at the same time, check every result, and reply with one short summary.",
             instructions => instructions,
         };
-        s += &format!("# Your instructions\n\n{instructions}\n\n# Members\n\n");
+        s += &format!("# Your instructions\n\n{instructions}\n\n");
+        if self.lead.config.extended_tools {
+            s += "# Your tools\n\n\
+                  You have tools: your folders, the user's MCP servers (like JIRA) and the shell. Use them to read what \
+                  you need before planning or reviewing (a ticket, a document, the code), not to do the members' work.\n\n";
+        }
+        s += "# Members\n\n";
         if self.members.is_empty() {
             s += "The team has no members yet. Answer by yourself, and suggest adding members in Team settings when a request needs them.\n";
         }
@@ -657,7 +663,7 @@ impl Run {
             );
             plan_schema()
         };
-        let value = agent::ask_json(&self.app, &self.lead, self.lead_prompt(), prompt, schema, cancel).await?;
+        let value = agent::ask_json_as_bot(&self.app, &self.lead, self.lead_prompt(), prompt, schema, cancel).await?;
         let (reply, tasks) = match flow {
             true => flow_tasks(&value, &self.team.flow, &self.members),
             false => auto_tasks(&value, &self.members),
@@ -886,7 +892,7 @@ impl Run {
         set.spawn(async move {
             let cancel = Arc::new(Notify::new());
             let review = tokio::select! {
-                value = agent::ask_json(&app, &lead, system, prompt, review_schema(), cancel) => value.map(parse_review),
+                value = agent::ask_json_as_bot(&app, &lead, system, prompt, review_schema(), cancel) => value.map(parse_review),
                 _ = stopped(&mut stop) => Err(STOPPED.to_string()),
             };
             Event::Reviewed { task_id, review }
@@ -1141,7 +1147,7 @@ impl Run {
         }
         prompt += "Write your reply to the user: one answer that pulls the results together, \
                    and say what failed or was skipped, if anything.";
-        match agent::ask_json(&self.app, &self.lead, self.lead_prompt(), prompt, reply_schema(), cancel).await {
+        match agent::ask_json_as_bot(&self.app, &self.lead, self.lead_prompt(), prompt, reply_schema(), cancel).await {
             Ok(value) => {
                 let reply = str_of(&value, "reply");
                 let text = match reply {

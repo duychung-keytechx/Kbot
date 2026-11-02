@@ -1,7 +1,15 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { backend, errorText } from "../lib/api";
 import { useAppSettings } from "../lib/hooks";
-import { type AgentConfig, type Bot, dateSchedule, DEFAULT_EVERY, DEFAULT_SCHEDULE, type Schedule } from "../lib/types";
+import {
+  type AgentConfig,
+  type Bot,
+  dateSchedule,
+  DEFAULT_EVERY,
+  DEFAULT_SCHEDULE,
+  EXTENDED_TOOLS_HINT,
+  type Schedule,
+} from "../lib/types";
 import {
   DatePicker,
   DayPicker,
@@ -166,6 +174,10 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
           <Toggle checked={draft.webAccess} onChange={(webAccess) => set({ webAccess })}>
             Search the web
           </Toggle>
+          <Toggle checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
+            MCP servers &amp; tools
+          </Toggle>
+          <p className="-mt-1 pl-[23px] text-[12px] text-hint">{EXTENDED_TOOLS_HINT}</p>
           <p className="text-[12px] text-hint">Folders it works with:</p>
           <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
         </Section>

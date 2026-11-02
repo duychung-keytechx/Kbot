@@ -388,7 +388,8 @@ function discardChanges(botId: string) {
 function setupCommand(botId: string) {
   const b = bot(botId);
   discardChanges(botId);
-  if (b.setupState !== "done") {
+  // Like `setup::has_setup`: team members and bots with instructions are set up too.
+  if (b.setupState !== "done" && !b.teamId && !b.config.instructions.trim()) {
     b.setupState = "pending";
     b.config = structuredClone(EMPTY_CONFIG);
     emitBots();

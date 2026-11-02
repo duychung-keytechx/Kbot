@@ -7,6 +7,7 @@
 //! interrupted by quitting the app resumes where it left off.
 //!
 //! Typing `/setup` starts over a bot that isn't set up yet. A set-up bot
+//! (see `has_setup`: team members and bots with instructions count too)
 //! instead shows its current setup and takes changes in plain words: Claude
 //! applies them to the config and the user saves the result. The bot stays
 //! `done` meanwhile, with `Step::Edit` in `setup_step`.
@@ -268,13 +269,21 @@ pub fn skip(app: &AppHandle, bot_id: &str) -> Result<(), String> {
 /// over; a set-up bot shows its current setup and waits for changes.
 pub fn command(app: &AppHandle, bot_id: &str) -> Result<(), String> {
     let bot = store_op(app, |s| s.bot(bot_id))?;
-    if bot.setup_state != SetupState::Done {
+    if !has_setup(&bot) {
         return restart(app, bot_id);
     }
     discard_changes(app, bot_id)?;
     enter(app, &bot, Step::Edit { draft: bot.config.clone(), name: None })?;
     post(app, bot_id, MessageBody::SetupCurrent { config: bot.config });
     Ok(())
+}
+
+/// Whether `/setup` shows the bot's setup to change instead of starting
+/// onboarding over: it went through onboarding, or got its setup another
+/// way (team members are made `skipped` with their role and instructions
+/// from Team settings; any bot can have instructions typed in Edit bot).
+fn has_setup(bot: &Bot) -> bool {
+    bot.setup_state == SetupState::Done || bot.team_id.is_some() || !bot.config.instructions.trim().is_empty()
 }
 
 /// "Exit setup": leaves `/setup` without saving the change under review.
@@ -978,6 +987,31 @@ mod tests {
         assert_eq!(apply(&step, Input::Card(save), &mut config), Ok(Next::Done));
         assert_eq!(config, AgentConfig { instructions: "Use bullets.".into(), ..draft });
         assert!(apply(&step, choice(YES), &mut config).is_err());
+    }
+
+    #[test]
+    fn setup_command_edits_bots_set_up_any_way() {
+        let bot = |setup_state, team_id: Option<&str>, instructions: &str| Bot {
+            id: "b".into(),
+            name: "Frontend".into(),
+            avatar: crate::models::Avatar::Image { image: crate::models::BotImage::Bot01 },
+            pinned: false,
+            updated_at: 0,
+            preview: String::new(),
+            setup_state,
+            config: AgentConfig { instructions: instructions.into(), ..AgentConfig::default() },
+            last_run_at: None,
+            editing: false,
+            unread: false,
+            tags: Vec::new(),
+            team_id: team_id.map(Into::into),
+            team_role: String::new(),
+        };
+        assert!(has_setup(&bot(SetupState::Done, None, "")));
+        assert!(has_setup(&bot(SetupState::Skipped, Some("team"), "")), "a team member");
+        assert!(has_setup(&bot(SetupState::Skipped, None, "Be brief.")), "instructions typed in Edit bot");
+        assert!(!has_setup(&bot(SetupState::Skipped, None, "  ")), "skipped onboarding, nothing set");
+        assert!(!has_setup(&bot(SetupState::Pending, None, "")));
     }
 
     #[test]

@@ -300,9 +300,11 @@ export interface AgentConfig {
   extendedTools: boolean;
 }
 
-/** What the "MCP servers & tools" switch does, under its label. */
-export const EXTENDED_TOOLS_HINT =
-  "Use your own Claude Code setup: MCP servers like JIRA, Claude in Chrome, skills and plugins";
+/** What the "MCP servers & tools" switch does on `provider`, under its label. */
+export const extendedToolsHint = (provider: Provider | undefined) =>
+  provider === "codex"
+    ? "Use your own Codex setup: MCP servers like JIRA, plugins and hooks"
+    : "Use your own Claude Code setup: MCP servers like JIRA, Claude in Chrome, skills and plugins";
 
 /** Mirrors `Bot::MAX_NAME`. */
 export const MAX_NAME = 60;

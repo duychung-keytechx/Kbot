@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { backend, errorText } from "../lib/api";
-import { useBots, useTags } from "../lib/hooks";
-import { type AgentConfig, type Bot, EXTENDED_TOOLS_HINT, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
+import { useAppSettings, useBots, useTags } from "../lib/hooks";
+import { type AgentConfig, type Bot, extendedToolsHint, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { FolderList, Switch } from "./fields";
 import {
@@ -48,6 +48,7 @@ const usageText = (n: number) => (n === 0 ? "Unused" : n === 1 ? "1 bot" : `${n}
  */
 export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("info");
+  const provider = useAppSettings()?.provider;
   const [name, setName] = useState(bot.name);
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot.config));
   const [busy, setBusy] = useState(false);
@@ -171,7 +172,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
                 <Switch checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
                   <span className="flex flex-col gap-0.5">
                     <span className="text-[14px] text-ink">MCP servers &amp; tools</span>
-                    <span className="text-[12px] text-hint">{EXTENDED_TOOLS_HINT}</span>
+                    <span className="text-[12px] text-hint">{extendedToolsHint(provider)}</span>
                   </span>
                 </Switch>
               </div>

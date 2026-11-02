@@ -7,7 +7,7 @@ import {
   dateSchedule,
   DEFAULT_EVERY,
   DEFAULT_SCHEDULE,
-  EXTENDED_TOOLS_HINT,
+  extendedToolsHint,
   type Schedule,
 } from "../lib/types";
 import {
@@ -40,7 +40,8 @@ const switchTo = (kind: (typeof KINDS)[number]): Partial<Schedule> =>
 /** Edits a bot's `AgentConfig`; opened by clicking the chat header. */
 export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: boolean; onClose: () => void }) {
   const [draft, setDraft] = useState<AgentConfig>(bot.config);
-  const codex = useAppSettings()?.provider === "codex";
+  const provider = useAppSettings()?.provider;
+  const codex = provider === "codex";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const dirty = JSON.stringify(draft) !== JSON.stringify(bot.config);
@@ -177,7 +178,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
           <Toggle checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
             MCP servers &amp; tools
           </Toggle>
-          <p className="-mt-1 pl-[23px] text-[12px] text-hint">{EXTENDED_TOOLS_HINT}</p>
+          <p className="-mt-1 pl-[23px] text-[12px] text-hint">{extendedToolsHint(provider)}</p>
           <p className="text-[12px] text-hint">Folders it works with:</p>
           <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
         </Section>

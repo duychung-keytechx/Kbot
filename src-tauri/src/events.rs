@@ -8,6 +8,7 @@ use crate::models::{AppSettings, Message, MessageEvent, RunEvent, Tag};
 use crate::AppState;
 
 pub const BOTS_CHANGED: &str = "kbot://bots";
+pub const TEAMS: &str = "kbot://teams";
 pub const TAGS: &str = "kbot://tags";
 pub const MESSAGE: &str = "kbot://message";
 pub const RUN: &str = "kbot://run";
@@ -28,14 +29,28 @@ pub fn message_only(app: &AppHandle, bot_id: &str, message: Message) {
     let _ = app.emit(MESSAGE, MessageEvent { bot_id: bot_id.to_string(), message });
 }
 
-/// Emits the bot list and updates the Dock badge to the number of unread bots.
+/// Emits the bot list and updates the Dock badge.
 pub fn bots_changed(app: &AppHandle) {
     let bots = app.state::<AppState>().store.lock().unwrap().bots();
-    let unread = bots.iter().filter(|b| b.unread).count() as i64;
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_badge_count((unread > 0).then_some(unread));
-    }
+    let unread = bots.iter().filter(|b| b.unread).count();
+    badge(app, unread + app.state::<AppState>().store.lock().unwrap().teams().iter().filter(|t| t.unread).count());
     let _ = app.emit(BOTS_CHANGED, bots);
+}
+
+/// Emits the team list, with what running teams are doing, and updates the
+/// Dock badge.
+pub fn teams_changed(app: &AppHandle) {
+    let teams = crate::teams::list(app);
+    let unread = teams.iter().filter(|t| t.unread).count();
+    badge(app, unread + app.state::<AppState>().store.lock().unwrap().bots().iter().filter(|b| b.unread).count());
+    let _ = app.emit(TEAMS, teams);
+}
+
+/// The Dock badge: the number of unread chats (bots and teams).
+fn badge(app: &AppHandle, unread: usize) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_badge_count((unread > 0).then_some(unread as i64));
+    }
 }
 
 /// Tags were added, renamed, recolored or deleted; the payload is all of them.
@@ -43,7 +58,7 @@ pub fn tags_changed(app: &AppHandle, tags: Vec<Tag>) {
     let _ = app.emit(TAGS, tags);
 }
 
-/// A bot's chat history was deleted; the payload is its id.
+/// A bot's or team's chat history was deleted; the payload is its id.
 pub fn cleared(app: &AppHandle, bot_id: &str) {
     let _ = app.emit(CLEARED, bot_id);
 }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { backend, errorText } from "../lib/api";
 import { useMessages, useTags } from "../lib/hooks";
-import type { Bot, Message } from "../lib/types";
+import type { Bot, Message, Team } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { Composer, type CommandName } from "./Composer";
 import { ClearHistoryDialog, DeleteBotDialog } from "./ConfirmDialog";
@@ -17,8 +17,22 @@ import {
 } from "./messages/SetupCards";
 import { SettingsPanel } from "./SettingsPanel";
 import { TagPills, tagsOf } from "./tags";
+import { BriefBubble, CheckNote, LeadAvatar, StatusLabel } from "./teams/parts";
 
-export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
+export function ChatView({
+  bot,
+  running,
+  team,
+  lead,
+  onOpenTeam,
+}: {
+  bot: Bot;
+  running: boolean;
+  /** The team the bot is a member of. */
+  team?: Team;
+  lead?: Bot;
+  onOpenTeam?: () => void;
+}) {
   const messages = useMessages(bot.id);
   const tags = useTags();
   const scroller = useRef<HTMLDivElement>(null);
@@ -31,6 +45,10 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   const waiting = messages.some((m) => m.type === "permission" && m.status === "pending");
   // Only a task on a date gets "Run now" here; other jobs have it in Settings.
   const isTask = !inSetup && bot.config.schedule?.date != null;
+  const status = team?.activity?.statuses[bot.id];
+  const leadName = lead?.name ?? "The orchestrator";
+  // What the user sends after the orchestrator's first brief is stepping in.
+  const firstBrief = messages.findIndex((m) => m.type === "brief");
 
   // A new bot greets the user and starts asking how to set it up.
   useEffect(() => {
@@ -75,6 +93,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
             <BotAvatar avatar={bot.avatar} size={18} />
             <p className="truncate text-[13.5px] font-semibold text-ink">{bot.name}</p>
           </button>
+          {team && status && <StatusLabel status={status} />}
           <TagPills tags={tagsOf(bot.tags, tags)} max={5} />
           <div data-tauri-drag-region className="flex-1 self-stretch" />
           {isTask && (
@@ -93,11 +112,32 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
           )}
         </header>
 
+        {team && (
+          <div className="flex shrink-0 items-center gap-2.5 border-b border-banner-line bg-banner-bg px-4 py-[9px]">
+            <LeadAvatar color={team.color} size={20} />
+            <p className="min-w-0 flex-1 text-[12.5px] leading-[18px] text-ink">
+              {status
+                ? `${leadName} gave this task to ${bot.name}. You can watch, or step in: what you send here goes to ${bot.name} only, and ${leadName} sees it.`
+                : `${bot.name} is in ${team.name}. ${leadName} sends it tasks here. What you send here goes to ${bot.name} only.`}
+            </p>
+            <button type="button" onClick={onOpenTeam} className={`${secondaryButton} shrink-0`}>
+              Back to team chat
+            </button>
+          </div>
+        )}
         <div ref={scroller} className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto px-6 pt-5 pb-4">
           {messages.length === 0 && !running ? (
             <EmptyState bot={bot} />
           ) : (
-            messages.map((m) => <MessageItem key={m.id} botId={bot.id} message={m} />)
+            messages.map((m, i) => (
+              <MessageItem
+                key={m.id}
+                botId={bot.id}
+                message={m}
+                team={team}
+                steppingIn={!!team && firstBrief >= 0 && i > firstBrief}
+              />
+            ))
           )}
           {running && !waiting && <Typing />}
         </div>
@@ -122,6 +162,7 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
         <Composer
           key={bot.id}
           botName={bot.name}
+          placeholder={status === "working" || status === "review" ? `Step in: message ${bot.name} directly` : undefined}
           running={running}
           onSend={send}
           onStop={() => void backend.cancelRun(bot.id)}
@@ -135,11 +176,23 @@ export function ChatView({ bot, running }: { bot: Bot; running: boolean }) {
   );
 }
 
-function MessageItem({ botId, message }: { botId: string; message: Message }) {
+export function MessageItem({
+  botId,
+  message,
+  team,
+  steppingIn,
+}: {
+  botId: string;
+  message: Message;
+  team?: Team;
+  /** A user message in a member's chat during its team's work. */
+  steppingIn?: boolean;
+}) {
   switch (message.type) {
     case "user":
       return (
-        <div className="flex justify-end self-stretch">
+        <div className="flex flex-col items-end gap-1.5 self-stretch">
+          {steppingIn && <p className="text-[12px] font-medium text-subtle">You · stepping in</p>}
           <div className="rounded-2xl bg-user-bubble px-3.5 py-[11px]">
             <p className="selectable max-w-[400px] text-[14px] leading-[21px] break-words whitespace-pre-wrap text-white">
               {message.text}
@@ -148,11 +201,22 @@ function MessageItem({ botId, message }: { botId: string; message: Message }) {
         </div>
       );
     case "system":
+      return <CheckNote text={message.text} />;
+    case "brief":
+      return <BriefBubble color={team?.color ?? "var(--color-unsaved)"} message={message} />;
+    case "member":
       return (
-        <div className="flex justify-center self-stretch py-1.5">
-          <p className="selectable max-w-[530px] text-center text-[12.5px] text-hint">{message.text}</p>
+        <div className="flex flex-col items-start gap-1.5">
+          <p className="text-[12px] font-medium text-subtle">{message.name}</p>
+          <div className="rounded-2xl bg-bubble px-3.5 py-[11px]">
+            <p className="selectable max-w-[530px] text-[14px] leading-[21px] break-words whitespace-pre-wrap text-ink">
+              {message.text}
+            </p>
+          </div>
         </div>
       );
+    case "plan":
+      return null;
     case "agent":
       return (
         <div className="rounded-2xl bg-bubble px-3.5 py-[11px]">

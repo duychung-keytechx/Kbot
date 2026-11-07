@@ -9,6 +9,7 @@ mod runs;
 mod scheduler;
 mod setup;
 mod store;
+mod teams;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -20,9 +21,11 @@ pub struct AppState {
     /// Where the database and the bots' working directories live.
     pub data_dir: PathBuf,
     pub runs: runs::Runs,
+    /// Teams working on a request.
+    pub teams: teams::Teams,
     pub claude: claude::Claude,
     pub codex: codex::Codex,
-    /// The bot whose chat is on screen in the focused window, if any; its
+    /// The bot or team whose chat is on screen in the focused window, if any; its
     /// job results aren't marked unread.
     pub viewing: Mutex<Option<String>>,
 }
@@ -53,6 +56,7 @@ pub fn run() {
                 store: Mutex::new(store),
                 data_dir: dir,
                 runs: runs::Runs::default(),
+                teams: teams::Teams::default(),
                 claude: claude::Claude::default(),
                 codex: codex::Codex::default(),
                 viewing: Mutex::new(None),
@@ -110,6 +114,20 @@ pub fn run() {
             commands::set_viewing,
             commands::get_app_settings,
             commands::update_app_settings,
+            commands::list_teams,
+            commands::create_team,
+            commands::update_team,
+            commands::set_team_collapsed,
+            commands::add_team_member,
+            commands::create_team_member,
+            commands::set_member_role,
+            commands::remove_team_member,
+            commands::make_lead,
+            commands::disband_team,
+            commands::send_team_message,
+            commands::pause_team,
+            commands::edit_team_plan,
+            commands::answer_team_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { backend, errorText } from "../lib/api";
-import { useBots, useTags } from "../lib/hooks";
-import { type AgentConfig, type Bot, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
+import { useAppSettings, useBots, useTags } from "../lib/hooks";
+import { type AgentConfig, type Bot, extendedToolsHint, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
 import { FolderList, Switch } from "./fields";
 import {
@@ -17,13 +17,14 @@ import {
 import { TagDot, tagStyle, tagsOf } from "./tags";
 
 /** The parts of `AgentConfig` that "Edit" in a bot's menu changes. */
-type Draft = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess">;
+type Draft = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess" | "extendedTools">;
 
-const draftOf = ({ description, instructions, workspaceFolders, webAccess }: AgentConfig): Draft => ({
+const draftOf = ({ description, instructions, workspaceFolders, webAccess, extendedTools }: AgentConfig): Draft => ({
   description,
   instructions,
   workspaceFolders,
   webAccess,
+  extendedTools,
 });
 
 type Tab = "info" | "tags";
@@ -43,10 +44,11 @@ const usageText = (n: number) => (n === 0 ? "Unused" : n === 1 ? "1 bot" : `${n}
 
 /**
  * "Edit" in a bot's menu. "Agent Info" changes its name, description,
- * instructions, folders and web search, kept until Save; "Tags" saves as you go.
+ * instructions, folders, web search and MCP servers & tools, kept until Save; "Tags" saves as you go.
  */
 export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("info");
+  const provider = useAppSettings()?.provider;
   const [name, setName] = useState(bot.name);
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot.config));
   const [busy, setBusy] = useState(false);
@@ -166,6 +168,14 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
                   </span>
                 </Switch>
               </div>
+              <div className="rounded-xl border border-modal-line py-0.5 pr-3.5 pl-4">
+                <Switch checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-[14px] text-ink">MCP servers &amp; tools</span>
+                    <span className="text-[12px] text-hint">{extendedToolsHint(provider)}</span>
+                  </span>
+                </Switch>
+              </div>
               {error && <p className="text-[12.5px] text-danger">{error}</p>}
             </Body>
             <Footer
@@ -196,7 +206,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
   );
 }
 
-function NavItem({
+export function NavItem({
   active,
   icon,
   onClick,
@@ -224,7 +234,7 @@ function NavItem({
 }
 
 /** The scrolling part of a tab: its title and close button, then `children`. */
-function Body({
+export function Body({
   title,
   subtitle,
   onClose,
@@ -258,7 +268,7 @@ function Body({
   );
 }
 
-function Footer({ status, children }: { status: ReactNode; children: ReactNode }) {
+export function Footer({ status, children }: { status: ReactNode; children: ReactNode }) {
   return (
     <div className="flex shrink-0 items-center justify-between gap-2.5 border-t border-divider pt-3.5 pr-4 pb-4 pl-8">
       <p className="flex items-center gap-1.5 text-[12px] text-hint">{status}</p>
@@ -267,7 +277,7 @@ function Footer({ status, children }: { status: ReactNode; children: ReactNode }
   );
 }
 
-function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: string; children: ReactNode }) {
+export function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={htmlFor} className="text-[13px] text-subtle">
@@ -280,7 +290,7 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: st
 }
 
 /** The "Tags" tab. Every change is saved right away. */
-function TagsTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
+export function TagsTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const tags = useTags();
   const bots = useBots();
   const [error, setError] = useState<string>();

@@ -23,6 +23,18 @@ pub enum Trigger {
     /// The bot's scheduled job; `manual` = "Run now" rather than the scheduler,
     /// `late` = when a missed one-time task was due ("today at 09:30").
     Job { manual: bool, late: Option<String> },
+    /// A task from the bot's team orchestrator (see `teams.rs`), sent as is.
+    Task(String),
+}
+
+/// How a run went, for a team task waiting on it.
+#[derive(Debug, Default)]
+pub struct Outcome {
+    /// The last complete reply.
+    pub text: String,
+    pub stopped: bool,
+    /// The CLI reported an error or quit unexpectedly.
+    pub failed: bool,
 }
 
 /// Appends a message to a bot's chat and tells the UI.
@@ -80,18 +92,46 @@ pub async fn ask_json(
     schema: Value,
     cancel: std::sync::Arc<tokio::sync::Notify>,
 ) -> Result<Value, String> {
+    structured(app, bot, system_prompt, prompt, schema, cancel, false).await
+}
+
+/// `ask_json` for a bot answering in its own role (a team lead planning or
+/// reviewing): with MCP servers & tools on, it gets its folders, the user's
+/// MCP servers and every tool, so it can look things up before answering.
+pub async fn ask_json_as_bot(
+    app: &AppHandle,
+    bot: &Bot,
+    system_prompt: String,
+    prompt: String,
+    schema: Value,
+    cancel: std::sync::Arc<tokio::sync::Notify>,
+) -> Result<Value, String> {
+    structured(app, bot, system_prompt, prompt, schema, cancel, true).await
+}
+
+async fn structured(
+    app: &AppHandle,
+    bot: &Bot,
+    system_prompt: String,
+    prompt: String,
+    schema: Value,
+    cancel: std::sync::Arc<tokio::sync::Notify>,
+    as_bot: bool,
+) -> Result<Value, String> {
     let settings = app_settings(app);
     let bin = ready_binary(app, settings.provider).await?;
+    let extended = as_bot && bot.config.extended_tools;
     let spec = RunSpec {
         prompt,
         system_prompt,
         session: Session::Ephemeral,
-        tools: Tools::None,
-        add_dirs: Vec::new(),
+        tools: json_tools(extended),
+        add_dirs: if extended { bot.config.workspace_folders.clone() } else { Vec::new() },
         model: settings.model_for(&bot.config),
         effort: Some(settings.effort),
         json_schema: Some(schema),
         cwd: workdir(app, &bot.id),
+        extended_tools: extended,
     };
     match settings.provider {
         Provider::Claude => claude::ask_json(&bin, spec, cancel).await,
@@ -109,7 +149,19 @@ pub fn spawn(app: AppHandle, ticket: Ticket, trigger: Trigger) {
     });
 }
 
-async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), String> {
+/// Runs one turn of `ticket.bot_id` and waits for it; errors are posted to
+/// the bot's chat like any reply.
+pub async fn run_turn(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Outcome {
+    match run(app, ticket, trigger).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            post(app, &ticket.bot_id, MessageBody::System { text: err });
+            Outcome { failed: true, ..Outcome::default() }
+        }
+    }
+}
+
+async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<Outcome, String> {
     let bot_id = ticket.bot_id.as_str();
     let state = app.state::<AppState>();
     let bot = state.store.lock().unwrap().bot(bot_id)?;
@@ -145,6 +197,7 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         effort: Some(settings.effort),
         json_schema: None,
         cwd: workdir(app, bot_id),
+        extended_tools: bot.config.extended_tools,
     };
     let mut input = ticket.input.lock().await;
     let job = matches!(trigger, Trigger::Job { .. });
@@ -197,7 +250,7 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<(), S
         if job && !stopped {
             mark_unread(app, bot_id);
         }
-        return Ok(());
+        return Ok(Outcome { text: reply.text, stopped, failed: reply.failed });
     }
 }
 
@@ -475,6 +528,15 @@ pub fn tools(config: &AgentConfig) -> Tools {
     }
 }
 
+/// Tools for a structured call: none, or with MCP servers & tools on, all
+/// but `AskUserQuestion`, since nobody is there to answer it.
+fn json_tools(extended: bool) -> Tools {
+    match extended {
+        true => Tools::AllExcept(vec!["AskUserQuestion"]),
+        false => Tools::None,
+    }
+}
+
 /// The bot's system prompt. Claude Code keeps a session's first system
 /// prompt on `--resume`, so changing the config must start a new session
 /// (see `commands::update_bot_config`), and anything that changes per turn,
@@ -543,6 +605,7 @@ where
     let body = match trigger {
         Trigger::UserMessage(text) => text.clone(),
         Trigger::ComputerHandback => "I'm done. You have control again.".into(),
+        Trigger::Task(text) => text.clone(),
         Trigger::Job { late, .. } => {
             let task = config.schedule.as_ref().map(|s| s.task.trim()).unwrap_or_default();
             let task = if task.is_empty() { config.description.trim() } else { task };
@@ -636,6 +699,8 @@ mod tests {
             editing: false,
             unread: false,
             tags: Vec::new(),
+            team_id: None,
+            team_role: String::new(),
         }
     }
 
@@ -665,6 +730,8 @@ mod tests {
         assert_eq!(tools(&config), Tools::AllExcept(vec!["WebSearch", "WebFetch"]));
         config.web_access = true;
         assert_eq!(tools(&config), Tools::AllExcept(Vec::new()));
+        assert_eq!(json_tools(false), Tools::None);
+        assert_eq!(json_tools(true), Tools::AllExcept(vec!["AskUserQuestion"]));
     }
 
     #[test]

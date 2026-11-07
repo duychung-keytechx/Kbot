@@ -9,6 +9,7 @@ import {
   type AgentConfig,
   type AppSettings,
   type Bot,
+  type BotImage,
   type ClaudeStatus,
   type CodexModels,
   type CodexStatus,
@@ -20,14 +21,22 @@ import {
   MAX_EVERY,
   MAX_NAME,
   MAX_TAG_NAME,
+  MAX_TEAM_NAME,
   MIN_EVERY,
   type Message,
   type MessageBody,
   type MessageEvent,
   type PermissionAnswer,
+  type PlanCard,
+  type PlanEdit,
+  type PlanTask,
   type RunEvent,
   type Tag,
   TAG_COLORS,
+  type TaskAction,
+  type TaskStatus,
+  type Team,
+  type TeamActivity,
 } from "./types";
 
 type Step = "kind" | "description" | "schedule" | "web" | "workspace" | "clarify" | "review" | "edit";
@@ -101,6 +110,26 @@ const bot = (botId: string) => {
   return b;
 };
 const emitBots = () => botListeners.forEach((cb) => cb(structuredClone(bots)));
+
+const teams: Team[] = [];
+const teamListeners = new Set<(teams: Team[]) => void>();
+/** `teams::list`: newest activity first, with what running teams are doing. */
+const listTeams = () =>
+  structuredClone(teams)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map((t) => ({ ...t, activity: live.get(t.id)?.activity ?? null }));
+const emitTeams = () => {
+  const list = listTeams();
+  teamListeners.forEach((cb) => cb(structuredClone(list)));
+};
+const team = (teamId: string) => {
+  const t = teams.find((t) => t.id === teamId);
+  if (!t) throw new Error(`unknown team ${teamId}`);
+  return t;
+};
+const isTeam = (id: string) => teams.some((t) => t.id === id);
+/** The owner of a chat: a bot, or a team for a team chat. */
+const chat = (id: string): Bot | Team => teams.find((t) => t.id === id) ?? bot(id);
 const sortedTags = () => structuredClone(tags).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 const emitTags = () => tagListeners.forEach((cb) => cb(sortedTags()));
 const tag = (tagId: string) => {
@@ -119,16 +148,20 @@ function cleanTagName(name: string, except?: string) {
 }
 
 function emit(botId: string, message: Message) {
-  messageListeners.forEach((cb) => cb({ botId, message: { ...message } }));
+  messageListeners.forEach((cb) => cb({ botId, message: structuredClone(message) }));
   emitBots();
+  if (isTeam(botId)) emitTeams();
 }
 
 function push(botId: string, body: MessageBody): Message {
   const message = { ...body, id: crypto.randomUUID(), createdAt: Date.now() } as Message;
-  conversations.get(botId)?.push(message);
-  const b = bot(botId);
+  if (!conversations.has(botId)) conversations.set(botId, []);
+  conversations.get(botId)!.push(message);
+  const b = chat(botId);
   b.updatedAt = message.createdAt;
   if (body.type === "user" || body.type === "agent") b.preview = body.text;
+  if (body.type === "member") b.preview = `${body.name}: ${body.text}`;
+  if (body.type === "brief") b.preview = `${body.from}: ${body.text}`;
   if (body.type === "permission")
     b.preview = body.questions[0]?.question ?? `Wants to use ${body.tool}. Approve?`;
   emit(botId, message);
@@ -225,7 +258,7 @@ function reply(botId: string, text: string, then?: () => void) {
     if (!message) message = push(botId, body);
     else {
       Object.assign(message, body);
-      bot(botId).preview = body.text;
+      chat(botId).preview = body.text;
       emit(botId, message);
     }
     if (shown < words.length) timer = window.setTimeout(tick, 60);
@@ -355,7 +388,8 @@ function discardChanges(botId: string) {
 function setupCommand(botId: string) {
   const b = bot(botId);
   discardChanges(botId);
-  if (b.setupState !== "done") {
+  // Like `setup::has_setup`: team members and bots with instructions are set up too.
+  if (b.setupState !== "done" && !b.teamId && !b.config.instructions.trim()) {
     b.setupState = "pending";
     b.config = structuredClone(EMPTY_CONFIG);
     emitBots();
@@ -438,6 +472,431 @@ function advance(botId: string, step: Step, input: string | Extract<Message, { t
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Agent teams, like src-tauri/src/teams.rs: the orchestrator plans tasks, the
+// members work on them (at most MAX_PARALLEL at once) and the orchestrator
+// checks each result. Timers stand in for the agents.
+
+const TEAM_BUSY = "Wait for the team to finish, or stop it.";
+const NOT_RUNNING = "The team isn't working on anything right now.";
+const MAX_PARALLEL = 3;
+const MAX_TASKS = 8;
+
+type Live = {
+  teamId: string;
+  request: string;
+  card: Message & { type: "plan" };
+  activity: TeamActivity;
+  paused: boolean;
+  timers: Set<number>;
+  /** Review rounds so far, by task id. */
+  reviews: Map<string, number>;
+  /** Steps-in waiting for the member's current task, by member id. */
+  stepIns: Map<string, string[]>;
+  failOn: string | null;
+};
+const live = new Map<string, Live>();
+
+const isFinished = (s: TaskStatus) => s === "done" || s === "skipped" || s === "failed";
+
+/** `team_bot`: a bot that skips setup, with web access. */
+function teamBot(name: string, image: BotImage, description: string, instructions: string): Bot {
+  const clean = name.trim();
+  if (!clean) throw new Error("Bot name is required");
+  if (clean.length > MAX_NAME) throw new Error(`Bot name can be at most ${MAX_NAME} characters`);
+  return {
+    id: crypto.randomUUID(),
+    name: clean,
+    avatar: { kind: "image", image },
+    pinned: false,
+    updatedAt: Date.now(),
+    preview: "",
+    setupState: "skipped",
+    config: { ...structuredClone(EMPTY_CONFIG), description: description.trim(), instructions: instructions.trim(), webAccess: true },
+    lastRunAt: null,
+    editing: false,
+    unread: false,
+    tags: [],
+    teamId: null,
+    teamRole: "",
+  };
+}
+
+function addBot(b: Bot) {
+  bots.splice(bots.filter((b) => b.pinned).length, 0, b);
+  conversations.set(b.id, []);
+}
+
+function cleanTeamName(name: string) {
+  const clean = name.trim();
+  if (!clean) throw new Error("Team name is required");
+  if (clean.length > MAX_TEAM_NAME) throw new Error(`Team name can be at most ${MAX_TEAM_NAME} characters`);
+  return clean;
+}
+
+function checkColor(color: string) {
+  if (!(TAG_COLORS as readonly string[]).includes(color)) throw new Error(`unknown tag color ${color}`);
+}
+
+/** `Flow::normalized`. */
+function normalizeFlow(t: Team) {
+  const nodes = t.flow.nodes.filter((n) => t.members.includes(n.memberId) && n.id);
+  const steps = [...new Set(nodes.map((n) => n.step))].sort((a, b) => a - b);
+  for (const n of nodes) {
+    n.step = steps.indexOf(n.step);
+    n.runs = Math.min(5, Math.max(1, n.runs));
+  }
+  const stepOf = new Map(nodes.map((n) => [n.id, n.step]));
+  for (const n of nodes) n.after = [...new Set(n.after.filter((id) => (stepOf.get(id) ?? Infinity) < n.step))];
+  nodes.sort((a, b) => a.step - b.step);
+  t.flow = { ...t.flow, nodes };
+}
+
+/** `leave_team`. */
+function leaveTeam(botId: string) {
+  const b = bot(botId);
+  if (!b.teamId) return;
+  const t = team(b.teamId);
+  if (t.leadId === botId) throw new Error(`This bot is ${t.name}'s orchestrator. Make another member the orchestrator first.`);
+  if (live.has(t.id)) throw new Error(TEAM_BUSY);
+  t.members = t.members.filter((m) => m !== botId);
+  normalizeFlow(t);
+  b.teamId = null;
+}
+
+/** `join_team`. */
+function joinTeam(teamId: string, botId: string, role?: string | null) {
+  const b = bot(botId);
+  if (b.teamId !== teamId) {
+    leaveTeam(botId);
+    b.teamId = teamId;
+    team(teamId).members.push(botId);
+  }
+  if (role != null) b.teamRole = role.trim();
+}
+
+function teamChanged(teamId: string): Team {
+  emitBots();
+  emitTeams();
+  return listTeams().find((t) => t.id === teamId)!;
+}
+
+function markUnread(teamId: string) {
+  if (viewing === teamId) return;
+  team(teamId).unread = true;
+  emitTeams();
+}
+
+/** `strip_mention`: "@Name do this" → "do this". */
+function stripMention(text: string, name: string) {
+  const t = text.trim();
+  const at = `@${name}`;
+  return t.toLowerCase().startsWith(at.toLowerCase()) ? t.slice(at.length).trim() || t : t;
+}
+
+function later(l: Live, ms: number, fn: () => void) {
+  const id = window.setTimeout(() => {
+    l.timers.delete(id);
+    if (live.get(l.teamId) === l) fn();
+  }, ms);
+  l.timers.add(id);
+}
+
+const roleOf = (b: Bot) => b.teamRole || b.config.description || "Help with the request";
+
+/** The tasks of a request: one per member, or the team's flow. */
+function planTasks(t: Team, request: string): PlanTask[] {
+  const member = (id: string) => bot(id);
+  if (t.mode === "flow" && t.flow.nodes.length > 0) {
+    const ids = new Map(t.flow.nodes.map((n, i) => [n.id, `t${i + 1}`]));
+    return t.flow.nodes.map((n) => {
+      // `Flow::waits_for`.
+      let after = n.after;
+      if (after.length === 0) {
+        const before = Math.max(-1, ...t.flow.nodes.filter((o) => o.step < n.step).map((o) => o.step));
+        after = before < 0 ? [] : t.flow.nodes.filter((o) => o.step === before).map((o) => o.id);
+      }
+      const m = member(n.memberId);
+      return {
+        id: ids.get(n.id)!,
+        title: n.task.trim() || roleOf(m),
+        memberId: m.id,
+        memberName: m.name,
+        brief: `${n.task.trim() || roleOf(m)}, for: ${request}`,
+        after: after.map((a) => ids.get(a)!).filter(Boolean),
+        step: n.step,
+        status: "waiting",
+        detail: "",
+        runs: n.runs,
+        run: 0,
+      };
+    });
+  }
+  return t.members.slice(0, MAX_TASKS).map((id, i) => {
+    const m = member(id);
+    return {
+      id: `t${i + 1}`,
+      title: roleOf(m),
+      memberId: m.id,
+      memberName: m.name,
+      brief: `${roleOf(m)}, for: ${request}`,
+      // The first two start together; the rest wait for the one before.
+      after: i < 2 ? [] : [`t${i}`],
+      step: null,
+      status: "waiting",
+      detail: "",
+      runs: 1,
+      run: 0,
+    };
+  });
+}
+
+/** `Run::describe_waiting` and `Run::activity`, then tells the UI. */
+function saveCard(l: Live) {
+  const { card } = l;
+  if (card.state === "running" || card.state === "paused") card.state = l.paused ? "paused" : "running";
+  const numbers = new Map(card.tasks.map((t, i) => [t.id, i + 1]));
+  const finished = new Map(card.tasks.map((t) => [t.id, isFinished(t.status)]));
+  for (const task of card.tasks) {
+    if (task.status === "working") {
+      task.detail = task.runs > 1 ? `Run ${task.run} of ${task.runs}` : (l.reviews.get(task.id) ?? 0) > 0 ? "Revising" : "Working on it";
+    } else if (task.status === "waiting" && task.run === 0) {
+      const pending = task.after.filter((a) => finished.get(a) === false).map((a) => numbers.get(a)!);
+      task.detail =
+        pending.length === 0
+          ? l.paused
+            ? "Paused"
+            : "Up next"
+          : pending.length === 1
+            ? `Starts after task ${pending[0]}`
+            : `Starts after tasks ${pending.join(", ")}`;
+    }
+  }
+  const rank: Record<TaskStatus, number> = { working: 6, review: 5, blocked: 4, waiting: 3, done: 2, failed: 1, skipped: 0 };
+  const statuses: Record<string, TaskStatus> = {};
+  for (const task of card.tasks) {
+    const cur = statuses[task.memberId];
+    if (!cur || rank[task.status] > rank[cur]) statuses[task.memberId] = task.status;
+  }
+  const total = card.tasks.length;
+  const done = card.tasks.filter((t) => isFinished(t.status)).length;
+  const working = card.tasks.filter((t) => t.status === "working").length;
+  let summary =
+    card.state === "paused" ? `Paused · ${done} of ${total} done` : working === 0 ? `${done} of ${total} done` : `${working} working · ${done} of ${total} done`;
+  if (card.tasks.some((t) => t.status === "blocked")) summary = `Needs you · ${summary}`;
+  l.activity = { statuses, summary };
+  emit(l.teamId, card);
+}
+
+/** Starts every task that can start: its waits are done, fewer than 3 work, one task per member. */
+function pump(l: Live) {
+  if (l.paused || l.card.state !== "running") return;
+  const tasks = l.card.tasks;
+  if (tasks.every((t) => isFinished(t.status))) return conclude(l);
+  const busy = () => tasks.filter((t) => t.status === "working" || t.status === "review");
+  for (const task of tasks) {
+    if (busy().length >= MAX_PARALLEL) break;
+    if (task.status !== "waiting") continue;
+    if (busy().some((t) => t.memberId === task.memberId)) continue;
+    const waits = task.after.map((a) => tasks.find((t) => t.id === a));
+    if (!waits.every((w) => !w || isFinished(w.status))) continue;
+    startTask(l, task);
+  }
+  saveCard(l);
+}
+
+function startTask(l: Live, task: PlanTask, note?: string) {
+  const t = team(l.teamId);
+  const lead = bot(t.leadId).name;
+  const number = l.card.tasks.indexOf(task) + 1;
+  task.status = "working";
+  task.run += 1;
+  const text =
+    note ??
+    (task.run > 1
+      ? `Run ${task.run} of ${task.runs}: improve on your last result.`
+      : `Task ${number} of ${l.card.tasks.length}: ${task.brief}`);
+  push(task.memberId, { type: "brief", from: lead, to: task.memberName, text, review: !!note });
+  bot(task.memberId).updatedAt = Date.now();
+  later(l, 2200 + Math.random() * 2200, () => finishWork(l, task));
+}
+
+function finishWork(l: Live, task: PlanTask) {
+  if (task.status !== "working") return;
+  const stepIns = l.stepIns.get(task.memberId) ?? [];
+  l.stepIns.delete(task.memberId);
+  if (l.failOn === task.id && (l.reviews.get(task.id) ?? 0) === 0) {
+    l.failOn = null;
+    const node = team(l.teamId).flow.nodes.find((n) => n.memberId === task.memberId && n.step === task.step);
+    const onFail = node?.onFail ?? "ask";
+    const reason = `${task.memberName} couldn't finish`;
+    push(task.memberId, { type: "system", text: `${task.memberName} couldn't reply. Its chat has the details.` });
+    if (onFail === "stop") {
+      task.status = "failed";
+      task.detail = reason;
+      push(l.teamId, { type: "system", text: `${reason}, so the team stopped.` });
+      return stopRun(l, false);
+    }
+    if (onFail === "skip") {
+      task.status = "skipped";
+      task.detail = `${reason} · skipped`;
+    } else {
+      task.status = "blocked";
+      task.detail = `${reason}. Retry, skip or stop?`;
+      markUnread(l.teamId);
+    }
+    return pump(l);
+  }
+  push(task.memberId, {
+    type: "agent",
+    text:
+      `Done: ${task.title.toLowerCase()}.` +
+      (stepIns.length ? ` I also took your note into account: “${stepIns.join(" ")}”.` : "") +
+      " (Browser mock)",
+  });
+  task.status = "review";
+  task.detail = `${bot(team(l.teamId).leadId).name} is checking the result`;
+  saveCard(l);
+  later(l, 1100, () => review(l, task));
+}
+
+function review(l: Live, task: PlanTask) {
+  if (task.status !== "review") return;
+  const lead = bot(team(l.teamId).leadId).name;
+  const rounds = l.reviews.get(task.id) ?? 0;
+  // The first task goes back once, to show a review round-trip.
+  if (task.id === "t1" && rounds === 0 && task.runs === 1) {
+    l.reviews.set(task.id, 1);
+    const notes = "a few results don't match the request";
+    push(l.teamId, { type: "system", text: `${lead} sent ${task.memberName}'s result back: ${notes}` });
+    task.status = "waiting";
+    task.run -= 1;
+    startTask(l, task, `Review: ${notes}. Fix those and send it again.`);
+    return saveCard(l);
+  }
+  if (task.run < task.runs && !(task.run >= 2 && Math.random() < 0.4)) {
+    task.status = "waiting";
+    startTask(l, task);
+    return saveCard(l);
+  }
+  const number = l.card.tasks.indexOf(task) + 1;
+  push(task.memberId, { type: "system", text: `${lead} accepted the result · task ${number} done` });
+  task.status = "done";
+  task.detail = rounds > 0 ? "Finished after review" : task.runs > 1 ? `Finished in ${task.run} runs` : "Finished";
+  pump(l);
+}
+
+function conclude(l: Live) {
+  l.card.state = "done";
+  saveCard(l);
+  const done = l.card.tasks.filter((t) => t.status === "done");
+  const text =
+    done.length === 0
+      ? "The team couldn't finish any task."
+      : `Done. ${done.map((t) => `${t.memberName}: ${t.title.toLowerCase()}`).join("; ")}. (Browser mock)`;
+  endRun(l);
+  reply(l.teamId, text, () => markUnread(l.teamId));
+}
+
+function endRun(l: Live) {
+  l.timers.forEach((id) => clearTimeout(id));
+  l.timers.clear();
+  live.delete(l.teamId);
+  setRunning(l.teamId, null);
+  emitTeams();
+}
+
+/** Stop: unfinished tasks are skipped. */
+function stopRun(l: Live, note = true) {
+  for (const task of l.card.tasks) {
+    if (!isFinished(task.status)) {
+      task.status = "skipped";
+      task.detail = "Stopped";
+    }
+  }
+  l.card.state = "stopped";
+  saveCard(l);
+  endRun(l);
+  if (note) push(l.teamId, { type: "system", text: "Stopped" });
+  markUnread(l.teamId);
+}
+
+/** `teams::spawn`: plan, then run the tasks. */
+function runTeam(teamId: string, request: string) {
+  const t = team(teamId);
+  const tasks = planTasks(t, request);
+  let timer = 0;
+  setRunning(teamId, () => {
+    clearTimeout(timer);
+    const l = live.get(teamId);
+    if (l) stopRun(l);
+    else {
+      setRunning(teamId, null);
+      push(teamId, { type: "system", text: "Stopped" });
+    }
+  });
+  timer = window.setTimeout(() => {
+    if (tasks.length === 0) {
+      setRunning(teamId, null);
+      reply(teamId, `${t.name} has no members yet, so I'll answer myself: “${request}”. Add members in Team settings. (Browser mock)`, () =>
+        markUnread(teamId),
+      );
+      return;
+    }
+    const flow = t.mode === "flow" && t.flow.nodes.length > 0;
+    const first = tasks.filter((x) => x.after.length === 0).map((x) => x.memberName);
+    push(teamId, {
+      type: "agent",
+      text: flow
+        ? `On it. Running the flow: ${first.join(" and ")} ${first.length === 1 ? "starts" : "start"} now.`
+        : `On it. I've split this into ${tasks.length === 1 ? "one task" : `${tasks.length} tasks`} for the team.`,
+    });
+    const body: PlanCard = { mode: flow ? "flow" : "auto", state: "running", tasks };
+    const card = push(teamId, { type: "plan", ...body }) as Live["card"];
+    const l: Live = {
+      teamId,
+      request,
+      card,
+      activity: { statuses: {}, summary: "" },
+      paused: false,
+      timers: new Set(),
+      reviews: new Map(),
+      stepIns: new Map(),
+      // "…fail…" in a request makes the last task fail, to try Retry / Skip / Stop.
+      failOn: /fail/i.test(request) ? tasks[tasks.length - 1].id : null,
+    };
+    live.set(teamId, l);
+    pump(l);
+  }, 900);
+}
+
+/** `teams::spawn_direct`: one member answers an @mention in the team chat. */
+function runDirect(teamId: string, member: Bot, ask: string) {
+  let timer = 0;
+  const done = () => {
+    setRunning(member.id, null);
+    if (!live.has(teamId)) setRunning(teamId, null);
+  };
+  const stop = () => {
+    clearTimeout(timer);
+    done();
+    push(teamId, { type: "system", text: `${member.name} was stopped` });
+  };
+  setRunning(member.id, stop);
+  if (!running.has(teamId)) setRunning(teamId, stop);
+  timer = window.setTimeout(() => {
+    const text = `Here's my answer to “${ask}”. (Browser mock)`;
+    push(member.id, { type: "agent", text });
+    push(teamId, { type: "member", botId: member.id, name: member.name, text });
+    done();
+    markUnread(teamId);
+  }, 1500);
+}
+
+const working = (teamId: string, memberId: string) =>
+  live.get(teamId)?.card.tasks.some((t) => t.memberId === memberId && (t.status === "working" || t.status === "review")) ?? false;
+
 export const mockBackend: Backend = {
   listBots: async () => structuredClone(bots),
   getMessages: async (botId) => structuredClone(conversations.get(botId) ?? []),
@@ -455,6 +914,8 @@ export const mockBackend: Backend = {
       editing: false,
       unread: false,
       tags: [],
+      teamId: null,
+      teamRole: "",
     };
     bots.splice(bots.filter((b) => b.pinned).length, 0, b);
     conversations.set(b.id, []);
@@ -463,6 +924,14 @@ export const mockBackend: Backend = {
     return structuredClone(b);
   },
   sendMessage: async (botId, text) => {
+    const teamId = bot(botId).teamId;
+    if (teamId && working(teamId, botId) && text.trim().toLowerCase() !== SETUP_COMMAND) {
+      // Stepping in: the text goes into the member's current task.
+      const message = push(botId, { type: "user", text: text.trim() });
+      const l = live.get(teamId)!;
+      l.stepIns.set(botId, [...(l.stepIns.get(botId) ?? []), text.trim()]);
+      return { ...message };
+    }
     if (running.has(botId)) throw new Error(BUSY);
     const message = push(botId, { type: "user", text: text.trim() });
     const step = steps.get(botId);
@@ -572,6 +1041,14 @@ export const mockBackend: Backend = {
     enter(botId, "kind");
   },
   clearChat: async (botId) => {
+    if (isTeam(botId)) {
+      if (running.has(botId) || live.has(botId)) throw new Error(TEAM_BUSY);
+      conversations.set(botId, []);
+      team(botId).preview = "";
+      clearedListeners.forEach((cb) => cb(botId));
+      emitTeams();
+      return;
+    }
     if (running.has(botId)) throw new Error(BUSY);
     conversations.set(botId, []);
     bot(botId).preview = "";
@@ -585,6 +1062,9 @@ export const mockBackend: Backend = {
   },
   deleteBot: async (botId) => {
     if (running.has(botId)) throw new Error(BUSY);
+    const teamId = bot(botId).teamId;
+    leaveTeam(botId);
+    if (teamId) emitTeams();
     bots.splice(bots.indexOf(bot(botId)), 1);
     conversations.delete(botId);
     steps.delete(botId);
@@ -662,6 +1142,13 @@ export const mockBackend: Backend = {
   },
   setViewing: async (botId) => {
     viewing = botId;
+    if (botId && isTeam(botId)) {
+      if (team(botId).unread) {
+        team(botId).unread = false;
+        emitTeams();
+      }
+      return;
+    }
     if (botId && bot(botId).unread) {
       bot(botId).unread = false;
       emitBots();
@@ -675,6 +1162,194 @@ export const mockBackend: Backend = {
     appSettings = { ...settings, defaultModel, codexModel };
     settingsListeners.forEach((cb) => cb({ ...appSettings }));
     return { ...appSettings };
+  },
+  listTeams: async () => listTeams(),
+  createTeam: async (input) => {
+    const name = cleanTeamName(input.name);
+    checkColor(input.color);
+    const lead = teamBot(input.leadName, input.leadImage, input.purpose, input.instructions);
+    // Check the existing bots before changing anything.
+    for (const m of input.members) {
+      if (m.botId) {
+        const b = bot(m.botId);
+        const other = b.teamId ? team(b.teamId) : null;
+        if (other?.leadId === b.id) throw new Error(`${b.name} is ${other.name}'s orchestrator and can't move.`);
+        if (other && live.has(other.id)) throw new Error(`${b.name} is working in ${other.name}. Wait for it to finish.`);
+      } else if (!m.name.trim()) throw new Error("Bot name is required");
+    }
+    addBot(lead);
+    const t: Team = {
+      id: crypto.randomUUID(),
+      name,
+      purpose: input.purpose.trim(),
+      color: input.color,
+      leadId: lead.id,
+      mode: input.mode,
+      flow: { nodes: [], skipUnneeded: input.flow.skipUnneeded },
+      collapsed: false,
+      updatedAt: Date.now(),
+      preview: "",
+      unread: false,
+      members: [],
+      activity: null,
+    };
+    teams.push(t);
+    conversations.set(t.id, []);
+    lead.teamId = t.id;
+    const ids = new Map<string, string>();
+    for (const m of input.members) {
+      if (m.botId) {
+        joinTeam(t.id, m.botId, m.role.trim() ? m.role : null);
+        ids.set(m.key, m.botId);
+      } else {
+        const b = teamBot(m.name, m.image ?? "bot01", m.role, "");
+        addBot(b);
+        joinTeam(t.id, b.id, m.role);
+        ids.set(m.key, b.id);
+      }
+    }
+    t.flow.nodes = structuredClone(input.flow.nodes).map((n) => ({ ...n, memberId: ids.get(n.memberId) ?? "" }));
+    normalizeFlow(t);
+    return teamChanged(t.id);
+  },
+  updateTeam: async (teamId, info) => {
+    const t = team(teamId);
+    const name = cleanTeamName(info.name);
+    checkColor(info.color);
+    Object.assign(t, { name, purpose: info.purpose.trim(), color: info.color, mode: info.mode, flow: structuredClone(info.flow) });
+    normalizeFlow(t);
+    return teamChanged(teamId);
+  },
+  setTeamCollapsed: async (teamId, collapsed) => {
+    team(teamId).collapsed = collapsed;
+    emitTeams();
+  },
+  addTeamMember: async (teamId, botId, role) => {
+    team(teamId);
+    const old = bot(botId).teamId;
+    joinTeam(teamId, botId, role ?? null);
+    if (old && old !== teamId) emitTeams();
+    return teamChanged(teamId);
+  },
+  createTeamMember: async (teamId, name, image, role) => {
+    team(teamId);
+    const b = teamBot(name, image, role, "");
+    addBot(b);
+    joinTeam(teamId, b.id, role);
+    teamChanged(teamId);
+    return structuredClone(b);
+  },
+  setMemberRole: async (botId, role) => {
+    bot(botId).teamRole = role.trim();
+    emitBots();
+  },
+  removeTeamMember: async (teamId, botId) => {
+    if (bot(botId).teamId !== teamId) throw new Error("This bot isn't in the team.");
+    leaveTeam(botId);
+    return teamChanged(teamId);
+  },
+  makeLead: async (teamId, botId) => {
+    if (live.has(teamId)) throw new Error(TEAM_BUSY);
+    const t = team(teamId);
+    if (!t.members.includes(botId)) throw new Error("Only a member of the team can be its orchestrator.");
+    t.members = [...t.members.filter((m) => m !== botId), t.leadId];
+    t.leadId = botId;
+    normalizeFlow(t);
+    return teamChanged(teamId);
+  },
+  disbandTeam: async (teamId) => {
+    if (live.has(teamId) || running.has(teamId)) throw new Error(TEAM_BUSY);
+    const t = team(teamId);
+    // The team chat moves to the orchestrator's chat.
+    const lead = conversations.get(t.leadId) ?? [];
+    conversations.set(t.leadId, [...lead, ...(conversations.get(teamId) ?? [])].sort((a, b) => a.createdAt - b.createdAt));
+    conversations.delete(teamId);
+    for (const b of bots) if (b.teamId === teamId) Object.assign(b, { teamId: null, teamRole: "" });
+    teams.splice(teams.indexOf(t), 1);
+    push(t.leadId, { type: "system", text: `${t.name} was disbanded. Its chat is above.` });
+    clearedListeners.forEach((cb) => cb(teamId));
+    emitBots();
+    emitTeams();
+  },
+  sendTeamMessage: async (teamId, text, memberId) => {
+    const clean = text.trim();
+    if (!clean) throw new Error("Message is empty");
+    const t = team(teamId);
+    if (!memberId) {
+      if (running.has(teamId) || live.has(teamId)) throw new Error(TEAM_BUSY);
+      const message = push(teamId, { type: "user", text: clean });
+      runTeam(teamId, clean);
+      return structuredClone(message);
+    }
+    if (!t.members.includes(memberId)) throw new Error("That bot isn't a member of this team.");
+    const member = bot(memberId);
+    const ask = stripMention(clean, member.name);
+    if (working(teamId, memberId)) {
+      const message = push(teamId, { type: "user", text: clean });
+      push(memberId, { type: "user", text: ask });
+      const l = live.get(teamId)!;
+      l.stepIns.set(memberId, [...(l.stepIns.get(memberId) ?? []), ask]);
+      push(teamId, { type: "system", text: `${member.name} will use this in its current task` });
+      return structuredClone(message);
+    }
+    if (running.has(memberId)) throw new Error(`${member.name} is busy. Wait for it to finish, or stop it.`);
+    const message = push(teamId, { type: "user", text: clean });
+    push(memberId, { type: "user", text: ask });
+    runDirect(teamId, member, ask);
+    return structuredClone(message);
+  },
+  pauseTeam: async (teamId, paused) => {
+    const l = live.get(teamId);
+    if (!l) throw new Error(NOT_RUNNING);
+    l.paused = paused;
+    saveCard(l);
+    if (!paused) pump(l);
+    emitTeams();
+  },
+  editTeamPlan: async (teamId, edits: PlanEdit[]) => {
+    const l = live.get(teamId);
+    if (!l) throw new Error(NOT_RUNNING);
+    const t = team(teamId);
+    for (const edit of edits) {
+      const task = l.card.tasks.find((x) => x.id === edit.taskId);
+      // Only tasks that haven't started can change.
+      if (!task || task.status !== "waiting" || task.run > 0) continue;
+      if (edit.remove) {
+        l.card.tasks = l.card.tasks.filter((x) => x !== task);
+        for (const other of l.card.tasks) other.after = other.after.filter((a) => a !== task.id);
+        continue;
+      }
+      if (edit.title.trim()) task.title = edit.title.trim();
+      if (edit.brief.trim()) task.brief = edit.brief.trim();
+      if (edit.memberId && t.members.includes(edit.memberId)) {
+        task.memberId = edit.memberId;
+        task.memberName = bot(edit.memberId).name;
+      }
+    }
+    pump(l);
+    saveCard(l);
+    emitTeams();
+  },
+  answerTeamTask: async (teamId, taskId, action: TaskAction) => {
+    const l = live.get(teamId);
+    if (!l) throw new Error(NOT_RUNNING);
+    const task = l.card.tasks.find((x) => x.id === taskId);
+    if (!task) throw new Error(`unknown task ${taskId}`);
+    if (action === "stop") return stopRun(l);
+    if (action === "skip") {
+      task.status = "skipped";
+      task.detail = "Skipped";
+    } else {
+      task.status = "waiting";
+      task.run = Math.max(0, task.run - 1);
+    }
+    pump(l);
+    saveCard(l);
+    emitTeams();
+  },
+  onTeams: (cb) => {
+    teamListeners.add(cb);
+    return () => teamListeners.delete(cb);
   },
   pickFolder: async () => prompt("Folder path (browser mock)") || null,
   onBots: (cb) => {

@@ -113,6 +113,12 @@ pub struct Bot {
     /// Ids of the bot's tags, in the order they were added.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The team the bot is in, as its orchestrator (`Team::lead_id`) or a member.
+    #[serde(default)]
+    pub team_id: Option<String>,
+    /// What the bot does in its team; the orchestrator routes tasks by it.
+    #[serde(default)]
+    pub team_role: String,
 }
 
 /// A label for grouping bots, shared by all of them.
@@ -154,6 +160,264 @@ impl Tag {
     }
 }
 
+/// An orchestrator (the lead) and the member bots it gives tasks to. Talking
+/// to the team is talking to the lead; the team chat is stored under the
+/// team's id (see `teams::run`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    /// "What does this team do?"
+    pub purpose: String,
+    /// One of `Tag::COLORS`; tints the team avatar and the orchestrator's crown.
+    pub color: String,
+    /// The orchestrator, a bot whose `team_id` is this team.
+    pub lead_id: String,
+    pub mode: TeamMode,
+    /// The run order when `mode` is `Flow`.
+    pub flow: Flow,
+    /// Shown as one row in the sidebar.
+    pub collapsed: bool,
+    pub updated_at: i64,
+    /// Last line of the team chat.
+    pub preview: String,
+    /// The orchestrator replied while the team chat wasn't on screen.
+    pub unread: bool,
+    /// Member ids in order, not counting the orchestrator.
+    pub members: Vec<String>,
+    /// What the team is doing right now; `None` when no request is running.
+    /// Not stored: filled in from `teams::Teams`.
+    #[serde(default)]
+    pub activity: Option<TeamActivity>,
+}
+
+impl Team {
+    pub const MAX_NAME: usize = 60;
+
+    pub fn clean_name(name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Team name is required".into());
+        }
+        if name.chars().count() > Self::MAX_NAME {
+            return Err(format!("Team name can be at most {} characters", Self::MAX_NAME));
+        }
+        Ok(name.to_string())
+    }
+}
+
+/// How the orchestrator runs a request.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TeamMode {
+    /// "Let it decide": the orchestrator plans the tasks for each request.
+    #[default]
+    Auto,
+    /// "Custom flow": members run in the order of `Team::flow`.
+    Flow,
+}
+
+/// A custom run order: steps run one after another, members in the same
+/// step at the same time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Flow {
+    pub nodes: Vec<FlowNode>,
+    /// The orchestrator may leave out members a request doesn't need, but
+    /// never changes the order.
+    pub skip_unneeded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FlowNode {
+    pub id: String,
+    pub member_id: String,
+    /// The step (column) it's in, from 0.
+    pub step: u32,
+    /// Nodes it waits for; empty = every node of the step before.
+    pub after: Vec<String>,
+    /// What the member does here; the orchestrator writes the brief from it.
+    pub task: String,
+    /// How many times it runs; each run gets its last result and the lead's notes.
+    pub runs: u32,
+    /// Stop repeating once the orchestrator accepts a result.
+    pub stop_early: bool,
+    pub gets: FlowInput,
+    pub on_fail: OnFail,
+}
+
+impl Default for FlowNode {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            member_id: String::new(),
+            step: 0,
+            after: Vec::new(),
+            task: String::new(),
+            runs: 1,
+            stop_early: true,
+            gets: FlowInput::Results,
+            on_fail: OnFail::Ask,
+        }
+    }
+}
+
+/// What a flow node gets besides its brief.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowInput {
+    /// The results of the nodes it waits for.
+    #[default]
+    Results,
+    /// Every result so far.
+    Everything,
+}
+
+/// What happens when a member can't finish its task.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OnFail {
+    /// Stop the whole run.
+    Stop,
+    /// Go on without it.
+    Skip,
+    /// Wait for the user to retry, skip or stop.
+    #[default]
+    Ask,
+}
+
+impl Flow {
+    pub const MAX_RUNS: u32 = 5;
+
+    /// Renumbers steps from 0 without gaps, drops nodes of unknown members
+    /// and waits that don't point at an earlier step, and clamps runs.
+    pub fn normalized(mut self, members: &[String]) -> Flow {
+        self.nodes.retain(|n| members.contains(&n.member_id) && !n.id.is_empty());
+        let mut steps: Vec<u32> = self.nodes.iter().map(|n| n.step).collect();
+        steps.sort_unstable();
+        steps.dedup();
+        for node in &mut self.nodes {
+            node.step = steps.iter().position(|s| *s == node.step).unwrap_or(0) as u32;
+            node.runs = node.runs.clamp(1, Self::MAX_RUNS);
+        }
+        let step_of: BTreeMap<String, u32> = self.nodes.iter().map(|n| (n.id.clone(), n.step)).collect();
+        for node in &mut self.nodes {
+            let step = node.step;
+            node.after.retain(|id| step_of.get(id).is_some_and(|s| *s < step));
+            node.after.dedup();
+        }
+        self.nodes.sort_by_key(|n| n.step);
+        self
+    }
+
+    /// The nodes `node` waits for: its own `after`, or every node of the
+    /// nearest earlier step.
+    pub fn waits_for(&self, node: &FlowNode) -> Vec<String> {
+        if !node.after.is_empty() {
+            return node.after.clone();
+        }
+        let before = self.nodes.iter().filter(|n| n.step < node.step).map(|n| n.step).max();
+        match before {
+            Some(step) => self.nodes.iter().filter(|n| n.step == step).map(|n| n.id.clone()).collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Live state of a team while it works on a request (see `Team::activity`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamActivity {
+    /// What each member is doing, by member id.
+    pub statuses: BTreeMap<String, TaskStatus>,
+    /// "1 working · 1 of 3 done", for the collapsed sidebar row.
+    pub summary: String,
+}
+
+/// One task of a plan, as the Plan card shows it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanTask {
+    pub id: String,
+    pub title: String,
+    pub member_id: String,
+    pub member_name: String,
+    pub brief: String,
+    /// Tasks that must finish first.
+    pub after: Vec<String>,
+    /// The flow step it belongs to; `None` in a plan the orchestrator made.
+    #[serde(default)]
+    pub step: Option<u32>,
+    pub status: TaskStatus,
+    /// "Starts after task 2", "20 leads · 3 swapped after review".
+    pub detail: String,
+    /// Planned runs (flow) and the current one.
+    pub runs: u32,
+    pub run: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Waiting,
+    Working,
+    /// The orchestrator is checking the result.
+    Review,
+    Done,
+    Skipped,
+    Failed,
+    /// Failed, and waiting for the user to retry, skip or stop.
+    Blocked,
+}
+
+impl TaskStatus {
+    /// Done, skipped or failed: tasks after it may start.
+    pub fn finished(self) -> bool {
+        matches!(self, TaskStatus::Done | TaskStatus::Skipped | TaskStatus::Failed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PlanState {
+    Running,
+    Paused,
+    Done,
+    Stopped,
+}
+
+/// The Plan card in a team chat, updated in place as tasks run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCard {
+    pub mode: TeamMode,
+    pub state: PlanState,
+    pub tasks: Vec<PlanTask>,
+}
+
+/// A change to a waiting task from "Edit plan".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanEdit {
+    pub task_id: String,
+    pub title: String,
+    pub brief: String,
+    pub member_id: String,
+    #[serde(default)]
+    pub remove: bool,
+}
+
+/// The user's answer when a task failed and its card asks what to do.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskAction {
+    Retry,
+    Skip,
+    Stop,
+}
+
 /// Whether the onboarding chat has configured this bot yet.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -182,6 +446,11 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Codex `--model` value; `None` = `AppSettings::codex_model`.
     pub codex_model: Option<String>,
+    /// Runs the CLI the way the user's own does: their settings, CLAUDE.md,
+    /// hooks, plugins and MCP servers, and Claude in Chrome. A team lead
+    /// also gets its tools when planning and reviewing. Off by default:
+    /// bots run isolated.
+    pub extended_tools: bool,
 }
 
 /// Claude Code `--model` for bots that don't pick their own.
@@ -458,6 +727,25 @@ pub enum MessageBody {
         #[serde(default)]
         answers: BTreeMap<String, String>,
     },
+    /// In a member's chat: a brief or review from its team's orchestrator.
+    Brief {
+        /// The orchestrator's name.
+        from: String,
+        /// The member's name.
+        to: String,
+        text: String,
+        /// Sent back after a review rather than a first brief.
+        review: bool,
+    },
+    /// In a team chat: a member's reply to an @mention.
+    Member {
+        #[serde(rename = "botId")]
+        bot_id: String,
+        name: String,
+        text: String,
+    },
+    /// In a team chat: the tasks of a request and how they're going.
+    Plan(PlanCard),
 }
 
 /// One question of an `AskUserQuestion` call, as Claude Code sends it.
@@ -551,4 +839,60 @@ pub struct RunEvent {
 pub struct MessageEvent {
     pub bot_id: String,
     pub message: Message,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: &str, member: &str, step: u32, after: &[&str]) -> FlowNode {
+        FlowNode {
+            id: id.into(),
+            member_id: member.into(),
+            step,
+            after: after.iter().map(|a| a.to_string()).collect(),
+            ..FlowNode::default()
+        }
+    }
+
+    #[test]
+    fn flow_normalizes_steps_members_and_waits() {
+        let flow = Flow {
+            nodes: vec![
+                node("c", "m3", 7, &["a", "c", "gone"]),
+                node("a", "m1", 2, &["c"]),
+                node("x", "stranger", 4, &[]),
+                FlowNode { runs: 0, ..node("b", "m2", 2, &[]) },
+                FlowNode { runs: 9, ..node("d", "m1", 9, &["b"]) },
+            ],
+            skip_unneeded: false,
+        };
+        let members = ["m1", "m2", "m3"].map(String::from);
+        let flow = flow.normalized(&members);
+        let ids: Vec<_> = flow.nodes.iter().map(|n| (n.id.as_str(), n.step)).collect();
+        assert_eq!(ids, [("a", 0), ("b", 0), ("c", 1), ("d", 2)]);
+        assert_eq!(flow.nodes[0].after, Vec::<String>::new());
+        assert_eq!(flow.nodes[1].runs, 1);
+        assert_eq!(flow.nodes[2].after, vec!["a".to_string()]);
+        assert_eq!(flow.nodes[3].runs, Flow::MAX_RUNS);
+        // An explicit wait, or the whole step before.
+        assert_eq!(flow.waits_for(&flow.nodes[3]), vec!["b".to_string()]);
+        assert_eq!(flow.waits_for(&flow.nodes[2]), vec!["a".to_string()]);
+        let c = FlowNode { after: Vec::new(), ..flow.nodes[2].clone() };
+        assert_eq!(flow.waits_for(&c), vec!["a".to_string(), "b".to_string()]);
+        assert!(flow.waits_for(&flow.nodes[0]).is_empty());
+    }
+
+    #[test]
+    fn team_messages_round_trip() {
+        let body = MessageBody::Member { bot_id: "b".into(), name: "R".into(), text: "hi".into() };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["type"], "member");
+        assert_eq!(json["botId"], "b");
+        let card = MessageBody::Plan(PlanCard { mode: TeamMode::Auto, state: PlanState::Running, tasks: Vec::new() });
+        let json = serde_json::to_value(&card).unwrap();
+        assert_eq!(json["type"], "plan");
+        assert_eq!(json["state"], "running");
+        assert!(matches!(serde_json::from_value::<MessageBody>(json).unwrap(), MessageBody::Plan(_)));
+    }
 }

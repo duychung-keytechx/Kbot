@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "./api";
-import type { AppSettings, Bot, ClaudeStatus, CodexStatus, Message, Tag } from "./types";
+import type { AppSettings, Bot, ClaudeStatus, CodexStatus, Message, Tag, Team } from "./types";
 
 export function useBots(): Bot[] {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -14,6 +14,21 @@ export function useBots(): Bot[] {
     };
   }, []);
   return bots;
+}
+
+/** All teams, newest activity first, kept live via `kbot://teams`. */
+export function useTeams(): Team[] {
+  const [teams, setTeams] = useState<Team[]>([]);
+  useEffect(() => {
+    let alive = true;
+    backend.listTeams().then((t) => alive && setTeams(t));
+    const off = backend.onTeams(setTeams);
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+  return teams;
 }
 
 /** All tags, by name, kept live via `kbot://tags`. */

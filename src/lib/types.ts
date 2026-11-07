@@ -86,6 +86,154 @@ export interface Bot {
   unread: boolean;
   /** Ids of the bot's tags, in the order they were added. */
   tags: string[];
+  /** The team the bot is in, as its orchestrator or a member. */
+  teamId: string | null;
+  /** What the bot does in its team; the orchestrator routes tasks by it. */
+  teamRole: string;
+}
+
+/** An orchestrator (the lead) and the member bots it gives tasks to. */
+export interface Team {
+  id: string;
+  name: string;
+  /** "What does this team do?" */
+  purpose: string;
+  /** One of `TAG_COLORS`. */
+  color: string;
+  /** The orchestrator, a bot in this team. */
+  leadId: string;
+  mode: TeamMode;
+  /** The run order when `mode` is "flow". */
+  flow: Flow;
+  collapsed: boolean;
+  updatedAt: number;
+  preview: string;
+  unread: boolean;
+  /** Member ids in order, not counting the orchestrator. */
+  members: string[];
+  /** What the team is doing right now; null when idle. */
+  activity: TeamActivity | null;
+}
+
+export const MAX_TEAM_NAME = 60;
+
+/** "auto" = Let it decide; "flow" = Custom flow. */
+export type TeamMode = "auto" | "flow";
+
+export interface Flow {
+  nodes: FlowNode[];
+  /** The orchestrator may leave out members a request doesn't need. */
+  skipUnneeded: boolean;
+}
+
+export type FlowInput = "results" | "everything";
+export type OnFail = "stop" | "skip" | "ask";
+
+export interface FlowNode {
+  id: string;
+  memberId: string;
+  /** The step (column), from 0. */
+  step: number;
+  /** Nodes it waits for; empty = every node of the step before. */
+  after: string[];
+  task: string;
+  /** 1..MAX_RUNS. */
+  runs: number;
+  stopEarly: boolean;
+  gets: FlowInput;
+  onFail: OnFail;
+}
+
+/** Mirrors `Flow::MAX_RUNS`. */
+export const MAX_RUNS = 5;
+
+export const EMPTY_FLOW: Flow = { nodes: [], skipUnneeded: false };
+
+export function newFlowNode(memberId: string, step: number): FlowNode {
+  return {
+    id: crypto.randomUUID(),
+    memberId,
+    step,
+    after: [],
+    task: "",
+    runs: 1,
+    stopEarly: true,
+    gets: "results",
+    onFail: "ask",
+  };
+}
+
+export type TaskStatus = "waiting" | "working" | "review" | "done" | "skipped" | "failed" | "blocked";
+
+export interface TeamActivity {
+  /** By member id. */
+  statuses: Record<string, TaskStatus>;
+  /** "1 working · 1 of 3 done". */
+  summary: string;
+}
+
+export interface PlanTask {
+  id: string;
+  title: string;
+  memberId: string;
+  memberName: string;
+  brief: string;
+  after: string[];
+  step: number | null;
+  status: TaskStatus;
+  detail: string;
+  runs: number;
+  run: number;
+}
+
+export type PlanState = "running" | "paused" | "done" | "stopped";
+
+export interface PlanCard {
+  mode: TeamMode;
+  state: PlanState;
+  tasks: PlanTask[];
+}
+
+export interface PlanEdit {
+  taskId: string;
+  title: string;
+  brief: string;
+  memberId: string;
+  remove: boolean;
+}
+
+export type TaskAction = "retry" | "skip" | "stop";
+
+/** A member in the "Create team" wizard: an existing bot, or a new agent. */
+export interface NewMember {
+  /** What the wizard's flow nodes call it. */
+  key: string;
+  botId: string | null;
+  name: string;
+  image: BotImage | null;
+  role: string;
+}
+
+export interface NewTeam {
+  name: string;
+  purpose: string;
+  color: string;
+  leadName: string;
+  leadImage: BotImage;
+  instructions: string;
+  mode: TeamMode;
+  members: NewMember[];
+  /** Members are named by `NewMember.key`. */
+  flow: Flow;
+}
+
+/** "Team settings": Team Info and Flow. */
+export interface TeamInfo {
+  name: string;
+  purpose: string;
+  color: string;
+  mode: TeamMode;
+  flow: Flow;
 }
 
 /** A label for grouping bots, shared by all of them. */
@@ -145,7 +293,18 @@ export interface AgentConfig {
   model: string | null;
   /** Codex `--model`; null = `AppSettings.codexModel`. */
   codexModel: string | null;
+  /**
+   * "MCP servers & tools": run with the user's own CLI setup (settings,
+   * CLAUDE.md, hooks, plugins, MCP servers, Claude in Chrome).
+   */
+  extendedTools: boolean;
 }
+
+/** What the "MCP servers & tools" switch does on `provider`, under its label. */
+export const extendedToolsHint = (provider: Provider | undefined) =>
+  provider === "codex"
+    ? "Use your own Codex setup: MCP servers like JIRA, plugins and hooks"
+    : "Use your own Claude Code setup: MCP servers like JIRA, Claude in Chrome, skills and plugins";
 
 /** Mirrors `Bot::MAX_NAME`. */
 export const MAX_NAME = 60;
@@ -215,6 +374,7 @@ export const EMPTY_CONFIG: AgentConfig = {
   webAccess: false,
   model: null,
   codexModel: null,
+  extendedTools: false,
 };
 
 export type Control = "user" | "agent";
@@ -260,7 +420,13 @@ export type MessageBody =
       status: PermissionStatus;
       /** Picked option labels by question text (comma-separated if several). */
       answers: Record<string, string>;
-    };
+    }
+  /** In a member's chat: a brief or review from its team's orchestrator. */
+  | { type: "brief"; from: string; to: string; text: string; review: boolean }
+  /** In a team chat: a member's reply to an @mention. */
+  | { type: "member"; botId: string; name: string; text: string }
+  /** In a team chat: the tasks of a request and how they're going. */
+  | ({ type: "plan" } & PlanCard);
 
 export type Question = {
   question: string;

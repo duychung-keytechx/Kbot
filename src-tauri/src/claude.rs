@@ -252,6 +252,9 @@ pub struct RunSpec {
     pub json_schema: Option<Value>,
     /// Empty working directory of the bot, so sessions never mix with a user project.
     pub cwd: PathBuf,
+    /// Load the user's settings, CLAUDE.md, hooks, plugins and MCP servers,
+    /// and connect Claude in Chrome (`AgentConfig::extended_tools`).
+    pub extended_tools: bool,
 }
 
 impl RunSpec {
@@ -269,17 +272,19 @@ impl RunSpec {
             "stream-json",
             "--permission-prompt-tool",
             "stdio",
-            // No user/project settings, CLAUDE.md, hooks or MCP servers.
-            "--setting-sources",
-            "",
-            "--strict-mcp-config",
             "--permission-mode",
             PERMISSION_MODE,
-            "--system-prompt",
         ]
         .map(String::from)
         .to_vec();
-        args.push(self.system_prompt.clone());
+        let sources: &[&str] = match self.extended_tools {
+            // The user's own setup, plus Claude in Chrome.
+            true => &["--setting-sources", "user,project,local", "--chrome"],
+            // No user/project settings, CLAUDE.md, hooks or MCP servers.
+            false => &["--setting-sources", "", "--strict-mcp-config"],
+        };
+        args.extend(sources.iter().map(|s| s.to_string()));
+        args.extend(["--system-prompt".into(), self.system_prompt.clone()]);
         match &self.session {
             Session::New(id) => args.extend(["--session-id".into(), id.clone()]),
             Session::Resume(id) => args.extend(["--resume".into(), id.clone()]),
@@ -491,10 +496,10 @@ async fn next_input(input: &mut Option<&mut UnboundedReceiver<String>>) -> Optio
     }
 }
 
-/// One-off structured call (`--json-schema`) with no tools and no saved
-/// session. Returns the `structured_output` object.
+/// One-off structured call (`--json-schema`) with `spec.tools` (usually
+/// none) and no saved session. Returns the `structured_output` object.
 pub async fn ask_json(bin: &Path, spec: RunSpec, cancel: Arc<Notify>) -> Result<Value, String> {
-    let spec = RunSpec { session: Session::Ephemeral, tools: Tools::None, ..spec };
+    let spec = RunSpec { session: Session::Ephemeral, ..spec };
     let mut output = None;
     let mut error = None;
     let exit = run(bin, &spec, cancel, None, |event| {
@@ -656,6 +661,7 @@ mod tests {
             effort: Some(Effort::Low),
             json_schema: None,
             cwd: PathBuf::from("/tmp"),
+            extended_tools: false,
         };
         let args = spec.args().join("|");
         assert!(args.contains("|--model|sonnet|--effort|low"));
@@ -678,5 +684,12 @@ mod tests {
         let tools = args.iter().position(|a| a == "--tools").unwrap();
         assert_eq!(args[tools + 1], "");
         assert!(args.contains(&"--no-session-persistence".to_string()));
+
+        // MCP servers & tools: the user's own setup and Claude in Chrome.
+        spec.extended_tools = true;
+        let args = spec.args().join("|");
+        assert!(args.contains("|--setting-sources|user,project,local|--chrome|"));
+        assert!(!args.contains("--strict-mcp-config"));
+        assert!(args.contains("|--permission-mode|bypassPermissions|"));
     }
 }

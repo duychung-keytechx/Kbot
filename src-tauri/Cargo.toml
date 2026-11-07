@@ -1,6 +1,6 @@
 [package]
 name = "kbot"
-version = "1.0.3"
+version = "1.0.4"
 description = "Kbot desktop app"
 authors = ["Keytechx"]
 license = "MIT"

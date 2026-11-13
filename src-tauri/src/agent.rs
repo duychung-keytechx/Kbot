@@ -82,6 +82,23 @@ pub async fn ready_binary(app: &AppHandle, provider: Provider) -> Result<PathBuf
     }
 }
 
+/// `ready_binary` for the provider a bot runs on. When the bot picked a
+/// provider other than the app's, the Connect steps aren't on screen, so the
+/// error says where to change it.
+async fn bot_binary(app: &AppHandle, settings: &AppSettings, config: &AgentConfig) -> Result<PathBuf, String> {
+    let provider = settings.provider_for(config);
+    ready_binary(app, provider).await.map_err(|err| {
+        if provider == settings.provider {
+            return err;
+        }
+        let name = provider.cli();
+        format!(
+            "This bot runs on {name}, which isn't set up yet. Choose {name} in Kbot Settings to see the setup steps, \
+             or pick another AI provider in the bot's Edit > AI Provider."
+        )
+    })
+}
+
 /// One-off structured call with no tools on the bot's provider and model,
 /// for onboarding helpers.
 pub async fn ask_json(
@@ -119,7 +136,8 @@ async fn structured(
     as_bot: bool,
 ) -> Result<Value, String> {
     let settings = app_settings(app);
-    let bin = ready_binary(app, settings.provider).await?;
+    let provider = settings.provider_for(&bot.config);
+    let bin = bot_binary(app, &settings, &bot.config).await?;
     let extended = as_bot && bot.config.extended_tools;
     let spec = RunSpec {
         prompt,
@@ -128,12 +146,12 @@ async fn structured(
         tools: json_tools(extended),
         add_dirs: if extended { bot.config.workspace_folders.clone() } else { Vec::new() },
         model: settings.model_for(&bot.config),
-        effort: Some(settings.effort),
+        effort: Some(settings.effort_for(&bot.config)),
         json_schema: Some(schema),
         cwd: workdir(app, &bot.id),
         extended_tools: extended,
     };
-    match settings.provider {
+    match provider {
         Provider::Claude => claude::ask_json(&bin, spec, cancel).await,
         Provider::Codex => codex::ask_json(app, &bin, spec, cancel).await,
     }
@@ -179,8 +197,8 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<Outco
         post(app, bot_id, MessageBody::System { text: format!("{job} \u{b7} {when}") });
     }
     let settings = app_settings(app);
-    let provider = settings.provider;
-    let bin = ready_binary(app, provider).await?;
+    let provider = settings.provider_for(&bot.config);
+    let bin = bot_binary(app, &settings, &bot.config).await?;
 
     let new_session = || Session::New(uuid::Uuid::new_v4().to_string());
     let session = match state.store.lock().unwrap().session_id(bot_id, provider)? {
@@ -194,7 +212,7 @@ async fn run(app: &AppHandle, ticket: &Ticket, trigger: Trigger) -> Result<Outco
         tools: tools(&bot.config),
         add_dirs: bot.config.workspace_folders.clone(),
         model: settings.model_for(&bot.config),
-        effort: Some(settings.effort),
+        effort: Some(settings.effort_for(&bot.config)),
         json_schema: None,
         cwd: workdir(app, bot_id),
         extended_tools: bot.config.extended_tools,

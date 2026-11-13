@@ -20,7 +20,8 @@ try {
   await createBot(browser, "Recruiter", "bot02");
   await createBot(browser, "Sales Assistant", "bot01");
 
-  await browser.$('button[aria-label="New bot"]').click();
+  await browser.$('button[aria-label="New"]').click();
+  await browser.$('//*[@role="menu"][@aria-label="New"]//button[@role="menuitem"][contains(., "New bot")]').click();
   await browser.$('input[placeholder="Name your bot"]').setValue("Support Bot");
   await browser.$('[aria-label="Picture"] button[aria-label="bot13"]').click();
   await browser.saveScreenshot(join(OUT, "new-bot.png"));

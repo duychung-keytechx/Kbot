@@ -442,10 +442,14 @@ pub struct AgentConfig {
     /// Folders the agent may read.
     pub workspace_folders: Vec<String>,
     pub web_access: bool,
+    /// The CLI this bot runs on; `None` = `AppSettings::provider`.
+    pub provider: Option<Provider>,
     /// Claude Code `--model` value (e.g. "sonnet"); `None` = `AppSettings::default_model`.
     pub model: Option<String>,
     /// Codex `--model` value; `None` = `AppSettings::codex_model`.
     pub codex_model: Option<String>,
+    /// `None` = `AppSettings::effort`.
+    pub effort: Option<Effort>,
     /// Runs the CLI the way the user's own does: their settings, CLAUDE.md,
     /// hooks, plugins and MCP servers, and Claude in Chrome. A team lead
     /// also gets its tools when planning and reviewing. Off by default:
@@ -526,13 +530,22 @@ pub struct AppSettings {
 }
 
 impl AppSettings {
-    /// The model a bot runs with on the current provider: its own, else the
+    /// The provider a bot runs on: its own, else the app's.
+    pub fn provider_for(&self, config: &AgentConfig) -> Provider {
+        config.provider.unwrap_or(self.provider)
+    }
+
+    /// The model a bot runs with on its provider: its own, else the
     /// default; `None` lets Codex use its configured model.
     pub fn model_for(&self, config: &AgentConfig) -> Option<String> {
-        match self.provider {
+        match self.provider_for(config) {
             Provider::Claude => Some(config.model.clone().unwrap_or_else(|| self.default_model.clone())),
             Provider::Codex => config.codex_model.clone().or_else(|| self.codex_model.clone()),
         }
+    }
+
+    pub fn effort_for(&self, config: &AgentConfig) -> Effort {
+        config.effort.unwrap_or(self.effort)
     }
 }
 
@@ -844,6 +857,34 @@ pub struct MessageEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bot_overrides_the_app_provider_model_and_effort() {
+        let settings = AppSettings {
+            provider: Provider::Claude,
+            default_model: "claude-opus-5-5".into(),
+            codex_model: Some("gpt-5.2-codex".into()),
+            effort: Effort::Medium,
+            theme: Theme::Light,
+        };
+        let follows = AgentConfig::default();
+        assert_eq!(settings.provider_for(&follows), Provider::Claude);
+        assert_eq!(settings.model_for(&follows).as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(settings.effort_for(&follows), Effort::Medium);
+
+        let sonnet = AgentConfig { model: Some("claude-sonnet-5-5".into()), effort: Some(Effort::High), ..follows.clone() };
+        assert_eq!(settings.model_for(&sonnet).as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(settings.effort_for(&sonnet), Effort::High);
+
+        // On Codex, the Claude model is ignored and Codex's is used.
+        let codex = AgentConfig { provider: Some(Provider::Codex), ..sonnet };
+        assert_eq!(settings.provider_for(&codex), Provider::Codex);
+        assert_eq!(settings.model_for(&codex).as_deref(), Some("gpt-5.2-codex"));
+
+        // Old configs without the new fields follow the app.
+        let old: AgentConfig = serde_json::from_str(r#"{"model":"opus"}"#).unwrap();
+        assert_eq!((old.provider, old.effort), (None, None));
+    }
 
     fn node(id: &str, member: &str, step: u32, after: &[&str]) -> FlowNode {
         FlowNode {

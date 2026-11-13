@@ -40,7 +40,9 @@ const switchTo = (kind: (typeof KINDS)[number]): Partial<Schedule> =>
 /** Edits a bot's `AgentConfig`; opened by clicking the chat header. */
 export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: boolean; onClose: () => void }) {
   const [draft, setDraft] = useState<AgentConfig>(bot.config);
-  const provider = useAppSettings()?.provider;
+  const app = useAppSettings();
+  // The bot's own provider (Edit > AI Provider), else Kbot Settings'.
+  const provider = draft.provider ?? app?.provider;
   const codex = provider === "codex";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -184,7 +186,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
         </Section>
 
         {codex ? (
-          <Section label="Codex model" hint="A Codex model name, like gpt-5.2-codex. Empty uses the Codex model from Kbot Settings.">
+          <Section label="Codex model" hint="A Codex model name, like gpt-5.2-codex. Empty uses the Codex model from Kbot Settings. Edit > AI Provider picks the AI agent.">
             <input
               value={draft.codexModel ?? ""}
               placeholder="Default"
@@ -194,7 +196,7 @@ export function SettingsPanel({ bot, running, onClose }: { bot: Bot; running: bo
             />
           </Section>
         ) : (
-          <Section label="Claude model" hint="A Claude Code model name, like sonnet or opus. Empty uses the Claude model from Kbot Settings.">
+          <Section label="Claude model" hint="A Claude Code model name, like sonnet or opus. Empty uses the Claude model from Kbot Settings. Edit > AI Provider picks the AI agent.">
             <input
               value={draft.model ?? ""}
               placeholder="Default"

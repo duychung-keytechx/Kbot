@@ -366,7 +366,7 @@ function MembersTab({
 
   const items = (bot: Bot): { label: string; hint?: string; danger?: boolean; onClick: () => void }[] => [
     { label: "Open chat", onClick: () => onOpenChat(bot.id) },
-    { label: "Edit agent", hint: "Name, instructions, folders, tools", onClick: () => setOverlay(<EditBotDialog bot={bot} onClose={dismiss} />) },
+    { label: "Edit agent", hint: "Name, instructions, folders, tools, AI model", onClick: () => setOverlay(<EditBotDialog bot={bot} onClose={dismiss} />) },
     { label: "Make orchestrator", hint: `${leadName} becomes a member`, onClick: () => void run(() => backend.makeLead(team.id, bot.id)) },
     { label: "Remove from team", hint: "Goes back to your bots, chats kept", onClick: () => void run(() => backend.removeTeamMember(team.id, bot.id)) },
     { label: "Delete agent", danger: true, onClick: () => setOverlay(<DeleteBotDialog bot={bot} onClose={dismiss} />) },

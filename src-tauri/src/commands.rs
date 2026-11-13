@@ -318,8 +318,19 @@ pub fn update_bot_config(app: AppHandle, state: State<AppState>, bot_id: String,
         if old.config != config {
             store.set_config(&bot_id, &config)?;
             // A resumed session keeps its first system prompt, so the new
-            // config only takes effect in a new session.
-            store.forget_sessions(&bot_id)?;
+            // config only takes effect in a new session. The provider, model
+            // and effort are passed on every run, so changing only them keeps
+            // the conversation (each provider has its own session).
+            let ai = |c: &AgentConfig| AgentConfig {
+                provider: None,
+                model: None,
+                codex_model: None,
+                effort: None,
+                ..c.clone()
+            };
+            if ai(&old.config) != ai(&config) {
+                store.forget_sessions(&bot_id)?;
+            }
         }
         store.bot(&bot_id)?
     };

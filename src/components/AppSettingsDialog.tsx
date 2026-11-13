@@ -1,8 +1,20 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { backend, errorText } from "../lib/api";
 import { useClaudeStatus, useCodexStatus } from "../lib/hooks";
 import { applyTheme } from "../lib/theme";
-import type { AppSettings, ClaudeStatus, CodexModels, CodexStatus, Effort, Provider, Theme } from "../lib/types";
+import { type AppSettings, DEFAULT_MODEL, type Effort, type Provider, type Theme } from "../lib/types";
+import {
+  CLAUDE_MODELS,
+  codexOptions,
+  EFFORTS,
+  ModelList,
+  SectionLabel,
+  Segmented,
+  SettingCard,
+  StatusLine,
+  useCodexModels,
+  withSaved,
+} from "./aiFields";
 import { CircleIcon, CloseIcon, MoonIcon, SparkleIcon, SunIcon } from "./Icons";
 
 const TABS = [
@@ -10,26 +22,6 @@ const TABS = [
   { id: "providers", label: "AI Providers", icon: <SparkleIcon /> },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
-
-/** One radio row of a model list; `id` null = "whatever the CLI is set up to use". */
-interface ModelOption {
-  id: string | null;
-  name: string;
-  description: string;
-  isDefault?: boolean;
-}
-
-const CLAUDE_MODELS: ModelOption[] = [
-  { id: "claude-opus-5-5", name: "Opus 5.5", description: "Most capable, for complex, long-running work" },
-  { id: "claude-sonnet-5-5", name: "Sonnet 5.5", description: "Balanced speed and quality for everyday bots", isDefault: true },
-  { id: "claude-haiku-5-5", name: "Haiku 5.5", description: "Fastest and cheapest, for light tasks" },
-];
-
-const EFFORTS: { id: Effort; label: string }[] = [
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-];
 
 /** Kbot > Settings… (⌘,): app-wide preferences, saved as soon as they change. */
 export function AppSettingsDialog({ onClose }: { onClose: () => void }) {
@@ -152,18 +144,7 @@ function Providers({ settings, save }: TabProps) {
   const codex = useCodexStatus(provider === "codex");
   const cli = provider === "claude" ? claude : codex;
 
-  const [codexModels, setCodexModels] = useState<CodexModels>();
-  useEffect(() => {
-    if (provider !== "codex") return;
-    let alive = true;
-    backend
-      .codexModels()
-      .then((m) => alive && setCodexModels(m))
-      .catch((e) => console.error(e));
-    return () => {
-      alive = false;
-    };
-  }, [provider]);
+  const codexModels = useCodexModels(provider === "codex");
 
   return (
     <>
@@ -177,7 +158,12 @@ function Providers({ settings, save }: TabProps) {
         ]}
         onChange={(provider) => void save({ provider })}
       />
-      <StatusLine status={cli.status} checking={cli.checking} onCheck={cli.check} />
+      <StatusLine
+        status={cli.status}
+        checking={cli.checking}
+        onCheck={cli.check}
+        setupHint="Close Settings to see the setup steps."
+      />
       <div className="h-2.5 shrink-0" />
 
       {provider === "claude" ? (
@@ -185,7 +171,10 @@ function Providers({ settings, save }: TabProps) {
           <SectionLabel>Claude model</SectionLabel>
           <ModelList
             label="Claude model"
-            options={withSaved(CLAUDE_MODELS, settings.defaultModel)}
+            options={withSaved(
+              CLAUDE_MODELS.map((m) => (m.id === DEFAULT_MODEL ? { ...m, badge: "Default" } : m)),
+              settings.defaultModel,
+            )}
             value={settings.defaultModel}
             onChange={(defaultModel) => defaultModel && void save({ defaultModel })}
           />
@@ -214,173 +203,9 @@ function Providers({ settings, save }: TabProps) {
         />
       </SettingCard>
       <p className="text-[12px] leading-[17px] text-hint">
-        The model Kbot asks {provider === "claude" ? "Claude Code" : "Codex"} to use. A bot can pick its own in its
-        settings.
+        Every bot runs on these, unless it picks its own in Edit &gt; AI Provider.
       </p>
     </>
   );
 }
 
-function statusText(status: ClaudeStatus | CodexStatus): string {
-  switch (status.state) {
-    case "ready":
-      if ("subscription" in status) return "Claude Code is installed and signed in";
-      return status.account === "ChatGPT" || status.account === "an API key"
-        ? "Codex CLI is installed and signed in"
-        : `Codex CLI is installed and set up with ${status.account}`;
-    case "notInstalled":
-      return "Not installed yet. Close Settings to see the setup steps.";
-    case "loggedOut":
-      return "Installed but not signed in. Close Settings to see the setup steps.";
-    case "notSubscription":
-      return `Claude Code is signed in with ${status.authMethod}, not a Claude subscription`;
-  }
-}
-
-/** The model from the Codex config (or Codex's own pick) as the default, then the models Codex offers. */
-function codexOptions({ configured, models }: CodexModels): ModelOption[] {
-  const fallback: ModelOption = configured
-    ? { id: null, name: configured, description: "From your Codex config", isDefault: true }
-    : { id: null, name: "Codex default", description: "The model Codex picks", isDefault: true };
-  return [
-    fallback,
-    ...models.filter((m) => m.id !== configured).map((m) => ({ id: m.id, name: m.id, description: m.description })),
-  ];
-}
-
-/** Adds a row for a saved model that isn't listed (typed in before, or no longer offered). */
-function withSaved(options: ModelOption[], saved: string | null): ModelOption[] {
-  if (saved === null || options.some((o) => o.id === saved)) return options;
-  return [...options, { id: saved, name: saved, description: "Custom model" }];
-}
-
-function SectionLabel({ children }: { children: ReactNode }) {
-  return <p className="shrink-0 text-[13px] text-icon">{children}</p>;
-}
-
-function StatusLine({
-  status,
-  checking,
-  onCheck,
-}: {
-  status: ClaudeStatus | CodexStatus | undefined;
-  checking: boolean;
-  onCheck: () => void;
-}) {
-  const dot = !status ? "bg-muted" : status.state === "ready" ? "bg-ok" : "bg-danger";
-  return (
-    <div className="flex shrink-0 items-center gap-1.5 text-[12px] text-icon" data-testid="provider-status">
-      <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
-      <p>{status ? statusText(status) : "Checking…"}</p>
-      {status && status.state !== "ready" && (
-        <button type="button" disabled={checking} onClick={onCheck} className="ml-1 font-medium text-ink hover:underline disabled:opacity-50">
-          {checking ? "Checking…" : "Check again"}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function SettingCard({ label, description, children }: { label: string; description: string; children: ReactNode }) {
-  return (
-    <div className="flex shrink-0 items-center justify-between gap-4 rounded-xl border border-modal-line py-3 pr-3 pl-4">
-      <div className="flex flex-col gap-0.5">
-        <p className="text-[14px] font-medium text-ink">{label}</p>
-        <p className="text-[12px] text-hint">{description}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * A row of mutually exclusive buttons that fills the width, or with `small`
- * the compact kind that sits at the end of a setting card.
- */
-function Segmented<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  small,
-}: {
-  label: string;
-  value: T;
-  options: { id: T; label: string; icon?: ReactNode }[];
-  onChange: (value: T) => void;
-  small?: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      className={`flex shrink-0 bg-bubble ${small ? "gap-0.5 rounded-lg p-0.5" : "gap-[3px] rounded-[10px] p-[3px]"}`}
-    >
-      {options.map((o) => {
-        const on = o.id === value;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            onClick={() => on || onChange(o.id)}
-            className={`flex items-center justify-center gap-1.5 font-medium ${
-              small ? "rounded-md px-2.5 py-[5px] text-[13px]" : "flex-1 rounded-lg px-3 py-[7px] text-[14px]"
-            } ${on ? "bg-raised text-ink shadow-[0_1px_3px_rgba(0,0,0,0.12)]" : "text-icon hover:text-ink"}`}
-          >
-            {o.icon}
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ModelList({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: ModelOption[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-}) {
-  return (
-    <div role="radiogroup" aria-label={label} className="flex shrink-0 flex-col overflow-hidden rounded-xl border border-modal-line">
-      {options.map((o) => {
-        const on = o.id === value;
-        return (
-          <button
-            key={o.id ?? ""}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            onClick={() => on || onChange(o.id)}
-            className={`flex items-center gap-3 border-divider px-4 py-2.5 text-left not-first:border-t ${
-              on ? "bg-sidebar" : "hover:bg-row-hover"
-            }`}
-          >
-            <span
-              className={`flex size-4 shrink-0 items-center justify-center rounded-full ${
-                on ? "bg-ink" : "border-[1.5px] border-radio-line"
-              }`}
-            >
-              {on && <span className="size-1.5 rounded-full bg-ink-inverse" />}
-            </span>
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="truncate text-[14px] font-medium text-ink">{o.name}</span>
-              <span className="text-[12px] text-hint">{o.description}</span>
-            </span>
-            {o.isDefault && (
-              <span className="shrink-0 rounded-md bg-row-active px-2 py-[3px] text-[11px] font-medium text-icon">Default</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}

@@ -391,7 +391,8 @@ function setupCommand(botId: string) {
   // Like `setup::has_setup`: team members and bots with instructions are set up too.
   if (b.setupState !== "done" && !b.teamId && !b.config.instructions.trim()) {
     b.setupState = "pending";
-    b.config = structuredClone(EMPTY_CONFIG);
+    const { provider, model, codexModel, effort } = b.config;
+    b.config = { ...structuredClone(EMPTY_CONFIG), provider, model, codexModel, effort };
     emitBots();
     enter(botId, "kind");
   } else {

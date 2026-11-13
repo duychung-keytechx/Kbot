@@ -289,10 +289,14 @@ export interface AgentConfig {
   schedule: Schedule | null;
   workspaceFolders: string[];
   webAccess: boolean;
+  /** The CLI this bot runs on; null = `AppSettings.provider`. */
+  provider: Provider | null;
   /** Claude Code `--model`; null = `AppSettings.defaultModel`. */
   model: string | null;
   /** Codex `--model`; null = `AppSettings.codexModel`. */
   codexModel: string | null;
+  /** null = `AppSettings.effort`. */
+  effort: Effort | null;
   /**
    * "MCP servers & tools": run with the user's own CLI setup (settings,
    * CLAUDE.md, hooks, plugins, MCP servers, Claude in Chrome).
@@ -372,8 +376,10 @@ export const EMPTY_CONFIG: AgentConfig = {
   schedule: null,
   workspaceFolders: [],
   webAccess: false,
+  provider: null,
   model: null,
   codexModel: null,
+  effort: null,
   extendedTools: false,
 };
 

@@ -3,6 +3,7 @@ import { backend, errorText } from "../lib/api";
 import { useAppSettings, useBots, useTags } from "../lib/hooks";
 import { type AgentConfig, type Bot, extendedToolsHint, MAX_NAME, MAX_TAG_NAME, type Tag, TAG_COLORS } from "../lib/types";
 import { BotAvatar } from "./avatars/BotAvatar";
+import { aiOf, type BotAi, BotAiFields } from "./BotAiFields";
 import { FolderList, Switch } from "./fields";
 import {
   CheckIcon,
@@ -10,16 +11,19 @@ import {
   InfoIcon,
   PencilIcon,
   SmallTrashIcon,
+  SparkleIcon,
   TagIcon,
   TinyCloseIcon,
   TinyPlusIcon,
 } from "./Icons";
 import { TagDot, tagStyle, tagsOf } from "./tags";
 
-/** The parts of `AgentConfig` that "Edit" in a bot's menu changes. */
-type Draft = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess" | "extendedTools">;
+/** The parts of `AgentConfig` that "Agent Info" changes. */
+type Info = Pick<AgentConfig, "description" | "instructions" | "workspaceFolders" | "webAccess" | "extendedTools">;
+/** The parts of `AgentConfig` that "Edit" in a bot's menu changes: Agent Info and AI Provider. */
+type Draft = Info & BotAi;
 
-const draftOf = ({ description, instructions, workspaceFolders, webAccess, extendedTools }: AgentConfig): Draft => ({
+const infoOf = ({ description, instructions, workspaceFolders, webAccess, extendedTools }: Info): Info => ({
   description,
   instructions,
   workspaceFolders,
@@ -27,7 +31,9 @@ const draftOf = ({ description, instructions, workspaceFolders, webAccess, exten
   extendedTools,
 });
 
-type Tab = "info" | "tags";
+const draftOf = (config: AgentConfig): Draft => ({ ...infoOf(config), ...aiOf(config) });
+
+type Tab = "info" | "ai" | "tags";
 type RowMode = "menu" | "rename" | "delete";
 
 const cancelButton =
@@ -44,16 +50,20 @@ const usageText = (n: number) => (n === 0 ? "Unused" : n === 1 ? "1 bot" : `${n}
 
 /**
  * "Edit" in a bot's menu. "Agent Info" changes its name, description,
- * instructions, folders, web search and MCP servers & tools, kept until Save; "Tags" saves as you go.
+ * instructions, folders, web search and MCP servers & tools, and "AI Provider"
+ * its own AI agent, model and effort, kept until Save; "Tags" saves as you go.
  */
 export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("info");
-  const provider = useAppSettings()?.provider;
+  const app = useAppSettings();
   const [name, setName] = useState(bot.name);
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot.config));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const provider = draft.provider ?? app?.provider;
   const renamed = name.trim() !== bot.name;
+  const infoChanged = renamed || JSON.stringify(infoOf(draft)) !== JSON.stringify(infoOf(bot.config));
+  const aiChanged = JSON.stringify(aiOf(draft)) !== JSON.stringify(aiOf(bot.config));
   const changed = JSON.stringify(draft) !== JSON.stringify(draftOf(bot.config));
   const dirty = renamed || changed;
 
@@ -71,7 +81,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
     setError(undefined);
     try {
       if (renamed) await backend.renameBot(bot.id, name);
-      // The schedule and model are kept as they are now.
+      // The schedule is kept as it is now.
       if (changed) await backend.updateBotConfig(bot.id, { ...bot.config, ...draft });
       onClose();
     } catch (e) {
@@ -103,7 +113,11 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
           </div>
           <NavItem active={tab === "info"} icon={<InfoIcon />} onClick={() => setTab("info")}>
             Agent Info
-            {dirty && <span title="Unsaved changes" className="ml-auto size-1.5 rounded-full bg-unsaved" />}
+            {infoChanged && <span title="Unsaved changes" className="ml-auto size-1.5 rounded-full bg-unsaved" />}
+          </NavItem>
+          <NavItem active={tab === "ai"} icon={<SparkleIcon />} onClick={() => setTab("ai")}>
+            AI Provider
+            {aiChanged && <span title="Unsaved changes" className="ml-auto size-1.5 rounded-full bg-unsaved" />}
           </NavItem>
           <NavItem active={tab === "tags"} icon={<TagIcon />} onClick={() => setTab("tags")}>
             Tags
@@ -113,7 +127,7 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
           </NavItem>
         </div>
 
-        {tab === "info" ? (
+        {tab !== "tags" ? (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -121,63 +135,74 @@ export function EditBotDialog({ bot, onClose }: { bot: Bot; onClose: () => void 
             }}
             className="flex min-w-0 flex-1 flex-col"
           >
-            <Body title="Agent Info" onClose={onClose}>
-              <Field label="Name" htmlFor="edit-name">
-                <input
-                  id="edit-name"
-                  autoFocus
-                  value={name}
-                  maxLength={MAX_NAME}
-                  spellCheck={false}
-                  onChange={(e) => setName(e.target.value)}
-                  className={`${field} h-10`}
-                />
-              </Field>
-              <Field label="Description" htmlFor="edit-description">
-                <textarea
-                  id="edit-description"
-                  rows={2}
-                  value={draft.description}
-                  onChange={(e) => set({ description: e.target.value })}
-                  className={`${field} resize-none leading-[20px]`}
-                />
-              </Field>
-              <Field
-                label="Instructions"
-                htmlFor="edit-instructions"
-                hint="What the bot follows. Changing it starts a new conversation."
+            {tab === "ai" ? (
+              <Body
+                title="AI Provider"
+                subtitle="The AI agent and model this bot runs on. It follows Kbot Settings until you pick its own here. Changing them keeps the conversation."
+                onClose={onClose}
               >
-                <textarea
-                  id="edit-instructions"
-                  rows={5}
-                  value={draft.instructions}
-                  onChange={(e) => set({ instructions: e.target.value })}
-                  className={`${field} resize-none leading-[20px]`}
-                />
-              </Field>
-              <Field label="Folders">
-                <div className="rounded-xl bg-sidebar p-2">
-                  <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
+                {app && <BotAiFields app={app} value={aiOf(draft)} onChange={set} />}
+                {error && <p className="text-[12.5px] text-danger">{error}</p>}
+              </Body>
+            ) : (
+              <Body title="Agent Info" onClose={onClose}>
+                <Field label="Name" htmlFor="edit-name">
+                  <input
+                    id="edit-name"
+                    autoFocus
+                    value={name}
+                    maxLength={MAX_NAME}
+                    spellCheck={false}
+                    onChange={(e) => setName(e.target.value)}
+                    className={`${field} h-10`}
+                  />
+                </Field>
+                <Field label="Description" htmlFor="edit-description">
+                  <textarea
+                    id="edit-description"
+                    rows={2}
+                    value={draft.description}
+                    onChange={(e) => set({ description: e.target.value })}
+                    className={`${field} resize-none leading-[20px]`}
+                  />
+                </Field>
+                <Field
+                  label="Instructions"
+                  htmlFor="edit-instructions"
+                  hint="What the bot follows. Changing it starts a new conversation."
+                >
+                  <textarea
+                    id="edit-instructions"
+                    rows={5}
+                    value={draft.instructions}
+                    onChange={(e) => set({ instructions: e.target.value })}
+                    className={`${field} resize-none leading-[20px]`}
+                  />
+                </Field>
+                <Field label="Folders">
+                  <div className="rounded-xl bg-sidebar p-2">
+                    <FolderList folders={draft.workspaceFolders} onChange={(workspaceFolders) => set({ workspaceFolders })} />
+                  </div>
+                </Field>
+                <div className="rounded-xl border border-modal-line py-0.5 pr-3.5 pl-4">
+                  <Switch checked={draft.webAccess} onChange={(webAccess) => set({ webAccess })}>
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-[14px] text-ink">Search the web</span>
+                      <span className="text-[12px] text-hint">Let the bot look things up online</span>
+                    </span>
+                  </Switch>
                 </div>
-              </Field>
-              <div className="rounded-xl border border-modal-line py-0.5 pr-3.5 pl-4">
-                <Switch checked={draft.webAccess} onChange={(webAccess) => set({ webAccess })}>
-                  <span className="flex flex-col gap-0.5">
-                    <span className="text-[14px] text-ink">Search the web</span>
-                    <span className="text-[12px] text-hint">Let the bot look things up online</span>
-                  </span>
-                </Switch>
-              </div>
-              <div className="rounded-xl border border-modal-line py-0.5 pr-3.5 pl-4">
-                <Switch checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
-                  <span className="flex flex-col gap-0.5">
-                    <span className="text-[14px] text-ink">MCP servers &amp; tools</span>
-                    <span className="text-[12px] text-hint">{extendedToolsHint(provider)}</span>
-                  </span>
-                </Switch>
-              </div>
-              {error && <p className="text-[12.5px] text-danger">{error}</p>}
-            </Body>
+                <div className="rounded-xl border border-modal-line py-0.5 pr-3.5 pl-4">
+                  <Switch checked={draft.extendedTools} onChange={(extendedTools) => set({ extendedTools })}>
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-[14px] text-ink">MCP servers &amp; tools</span>
+                      <span className="text-[12px] text-hint">{extendedToolsHint(provider)}</span>
+                    </span>
+                  </Switch>
+                </div>
+                {error && <p className="text-[12.5px] text-danger">{error}</p>}
+              </Body>
+            )}
             <Footer
               status={
                 dirty && (
